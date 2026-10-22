@@ -1,0 +1,10 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.type.v3;
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+message TokenBucket {
+  uint32 max_tokens = 1 [json_name = "maxTokens"];
+  .google.protobuf.UInt32Value tokens_per_fill = 2 [json_name = "tokensPerFill"];
+  .google.protobuf.Duration fill_interval = 3 [json_name = "fillInterval"];
+}

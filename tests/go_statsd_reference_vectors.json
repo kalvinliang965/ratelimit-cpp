@@ -1,0 +1,139 @@
+{
+  "format": "ratelimit-go-statsd-black-box-v1",
+  "cases": [
+    {
+      "id": "share_threshold_yaml",
+      "source": "ratelimit/test/config/config_test.go:TestShareThreshold (lines 1669-1980); its unmodified ratelimit/test/config/share_threshold.yaml is staged byte-for-byte",
+      "config_files": [
+        "ratelimit/test/config/share_threshold.yaml"
+      ],
+      "requests": [
+        {"domain": "test-domain", "entries": [["files", "files/a.pdf"]]},
+        {"domain": "test-domain", "entries": [["files", "files/b.csv"]]},
+        {"domain": "test-domain", "entries": [["files", "files/c.txt"]]},
+        {"domain": "test-domain", "entries": [["nested", "parent"], ["files", "nested/file1.txt"]]},
+        {"domain": "test-domain", "entries": [["files", "top/file1.txt"], ["files", "nested/file1.txt"]]},
+        {"domain": "test-domain", "entries": [["path", "path/foo"], ["file", "file/doc1"], ["type", "pdf"]]},
+        {"domain": "test-domain", "entries": [["user", "user/alice"], ["resource", "res/file1"], ["action", "read"]]},
+        {"domain": "test-domain", "entries": [["route", "api/v1"], ["method", "GET"]]},
+        {"domain": "test-domain", "entries": [["service", "svc/user"], ["endpoint", "get"]]},
+        {"domain": "test-domain", "entries": [["file", "test1"]]},
+        {"domain": "test-domain", "entries": [["file", "test2"]]},
+        {"domain": "test-domain", "entries": [["file", "test23"]]},
+        {"domain": "test-domain", "entries": [["file", "test123"]]},
+        {"domain": "test-domain", "entries": [["midpath", "/api/v1"]]},
+        {"domain": "test-domain", "entries": [["midpath", "/api-beta-v1"]]},
+        {"domain": "test-domain", "entries": [["midpath", "/apiXYZv1"]]},
+        {"domain": "test-domain", "entries": [["multiroute", "svcAepBrpc"]]},
+        {"domain": "test-domain", "entries": [["multiroute", "svcXXXepYYYrpc"]]},
+        {"domain": "test-domain", "entries": [["multiroute", "svceprpc"]]},
+        {"domain": "test-domain", "entries": [["midroute", "/api/v2"]]},
+        {"domain": "test-domain", "entries": [["midroute", "/api-beta-v2"]]},
+        {"domain": "test-domain", "entries": [["tenant", "t1prod"], ["resource", "resAv2"]]},
+        {"domain": "test-domain", "entries": [["tenant", "t99prod"], ["resource", "resBBBv2"]]}
+      ],
+      "metric_hits": {
+        "test-domain.files_files/*": 3,
+        "test-domain.nested_parent.files_nested/*": 1,
+        "test-domain.files_top/*.files_nested/*": 1,
+        "test-domain.path_path/*.file_file/*.type": 1,
+        "test-domain.user_user/*.resource_res/*.action": 1,
+        "test-domain.route_api/*.method": 1,
+        "test-domain.service_svc/*.endpoint_get": 1,
+        "test-domain.file_test1": 1,
+        "test-domain.file_test*": 3,
+        "test-domain.midpath_/api*v1": 3,
+        "test-domain.multiroute_svc*ep*rpc": 3,
+        "test-domain.midroute_/api*v2": 2,
+        "test-domain.tenant_t*prod.resource_res*v2": 2
+      },
+      "expected_redis_stems": [
+        "test-domain_files_files/*",
+        "test-domain_nested_parent_files_nested/*",
+        "test-domain_files_top/*_files_nested/*",
+        "test-domain_path_path/*_file_file/doc1_type_pdf",
+        "test-domain_user_user/*_resource_res/*_action_read",
+        "test-domain_route_api/*_method_GET",
+        "test-domain_service_svc/*_endpoint_get",
+        "test-domain_file_test1",
+        "test-domain_file_test*",
+        "test-domain_midpath_/api*v1",
+        "test-domain_multiroute_svc*ep*rpc",
+        "test-domain_midroute_/api*v2",
+        "test-domain_tenant_t*prod_resource_res*v2"
+      ]
+    },
+    {
+      "id": "wildcard_no_flags",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior no-flags subtest (lines 1991-2018)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*", "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo1"]]}],
+      "metric_hits": {"test-domain.wild_foo*": 1}
+    },
+    {
+      "id": "wildcard_value_to_metric",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior value_to_metric subtest (lines 2021-2048)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*", "value_to_metric": true, "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo1"]]}],
+      "metric_hits": {"test-domain.wild_foo1": 1}
+    },
+    {
+      "id": "wildcard_share_threshold",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior share_threshold subtest (lines 2050-2077)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*", "share_threshold": true, "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo1"]]}],
+      "metric_hits": {"test-domain.wild_foo*": 1}
+    },
+    {
+      "id": "wildcard_share_threshold_value_to_metric",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior share_threshold/value_to_metric priority subtest (lines 2079-2112)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*", "share_threshold": true, "value_to_metric": true, "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo1"]]}],
+      "metric_hits": {"test-domain.wild_foo*": 1}
+    },
+    {
+      "id": "wildcard_other_value_to_metric",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior value_to_metric-in-other-descriptor subtest (lines 2114-2157)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*", "descriptors": [{"key": "other", "value_to_metric": true, "descriptors": [{"key": "limit", "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]}]}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo1"], ["other", "bar"], ["limit", "X"]]}],
+      "metric_hits": {"test-domain.wild_foo*.other_bar.limit": 1}
+    },
+    {
+      "id": "middle_trailing_wildcard_no_flags",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior middle+trailing no-flags subtest (lines 2163-2186)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*bar*", "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [
+        {"domain": "test-domain", "entries": [["wild", "foo123bar456"]]},
+        {"domain": "test-domain", "entries": [["wild", "fooXbarY"]]}
+      ],
+      "metric_hits": {"test-domain.wild_foo*bar*": 2}
+    },
+    {
+      "id": "middle_trailing_wildcard_value_to_metric",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardStatsBehavior middle+trailing value_to_metric subtest (lines 2188-2210)",
+      "policy": {"domain": "test-domain", "descriptors": [{"key": "wild", "value": "foo*bar*", "value_to_metric": true, "rate_limit": {"unit": "minute", "requests_per_unit": 20}}]},
+      "requests": [{"domain": "test-domain", "entries": [["wild", "foo123bar456"]]}],
+      "metric_hits": {"test-domain.wild_foo123bar456": 1}
+    },
+    {
+      "id": "value_to_metric_detailed_metric_precedence",
+      "source": "ratelimit/test/config/config_test.go:TestValueToMetric_DoesNotOverrideDetailedMetric (lines 1206-1263)",
+      "policy": {"domain": "domain", "descriptors": [{"key": "route", "value_to_metric": true, "descriptors": [{"key": "http_method", "value_to_metric": true, "descriptors": [{"key": "subject_id", "detailed_metric": true, "rate_limit": {"unit": "minute", "requests_per_unit": 60}}]}]}]},
+      "requests": [{"domain": "domain", "entries": [["route", "draw"], ["http_method", "GET"], ["subject_id", "123"]]}],
+      "metric_hits": {"domain.route_draw.http_method_GET.subject_id_123": 1}
+    },
+    {
+      "id": "value_to_metric_wildcard_runtime_values",
+      "source": "ratelimit/test/config/config_test.go:TestValueToMetric_WithWildcard (lines 1354-1426)",
+      "policy": {"domain": "domain", "descriptors": [{"key": "user", "value_to_metric": true, "descriptors": [{"key": "action", "value": "read*", "value_to_metric": true, "descriptors": [{"key": "resource", "rate_limit": {"unit": "minute", "requests_per_unit": 100}}]}]}]},
+      "requests": [
+        {"domain": "domain", "entries": [["user", "alice"], ["action", "readfile"], ["resource", "documents"]]},
+        {"domain": "domain", "entries": [["user", "bob"], ["action", "readdata"], ["resource", "database"]]}
+      ],
+      "metric_hits": {
+        "domain.user_alice.action_readfile.resource": 1,
+        "domain.user_bob.action_readdata.resource": 1
+      }
+    }
+  ]
+}

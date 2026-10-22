@@ -1,0 +1,36 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.config.core.v3;
+message SocketOption {
+  enum SocketState {
+    STATE_PREBIND = 0;
+    STATE_BOUND = 1;
+    STATE_LISTENING = 2;
+  }
+  enum SocketIpVersion {
+    SOCKET_IP_VERSION_UNSPECIFIED = 0;
+    SOCKET_IP_VERSION_IPV4 = 1;
+    SOCKET_IP_VERSION_IPV6 = 2;
+  }
+  message SocketType {
+    message Stream {
+    }
+    message Datagram {
+    }
+    .envoy.config.core.v3.SocketOption.SocketType.Stream stream = 1 [json_name = "stream"];
+    .envoy.config.core.v3.SocketOption.SocketType.Datagram datagram = 2 [json_name = "datagram"];
+  }
+  string description = 1 [json_name = "description"];
+  int64 level = 2 [json_name = "level"];
+  int64 name = 3 [json_name = "name"];
+  .envoy.config.core.v3.SocketOption.SocketState state = 6 [json_name = "state"];
+  .envoy.config.core.v3.SocketOption.SocketType type = 7 [json_name = "type"];
+  .envoy.config.core.v3.SocketOption.SocketIpVersion ip_version = 8 [json_name = "ipVersion"];
+  oneof value {
+    int64 int_value = 4 [json_name = "intValue"];
+    bytes buf_value = 5 [json_name = "bufValue"];
+  }
+}
+message SocketOptionsOverride {
+  repeated .envoy.config.core.v3.SocketOption socket_options = 1 [json_name = "socketOptions"];
+}

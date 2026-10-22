@@ -1,0 +1,188 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.config.core.v3;
+import "envoy/config/core/v3/address.proto";
+import "envoy/config/core/v3/backoff.proto";
+import "envoy/config/core/v3/http_uri.proto";
+import "envoy/type/v3/percent.proto";
+import "envoy/type/v3/semantic_version.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/wrappers.proto";
+import "xds/core/v3/context_params.proto";
+enum RoutingPriority {
+  DEFAULT = 0;
+  HIGH = 1;
+}
+enum RequestMethod {
+  METHOD_UNSPECIFIED = 0;
+  GET = 1;
+  HEAD = 2;
+  POST = 3;
+  PUT = 4;
+  DELETE = 5;
+  CONNECT = 6;
+  OPTIONS = 7;
+  TRACE = 8;
+  PATCH = 9;
+}
+enum TrafficDirection {
+  UNSPECIFIED = 0;
+  INBOUND = 1;
+  OUTBOUND = 2;
+}
+message Locality {
+  string region = 1 [json_name = "region"];
+  string zone = 2 [json_name = "zone"];
+  string sub_zone = 3 [json_name = "subZone"];
+}
+message BuildVersion {
+  .envoy.type.v3.SemanticVersion version = 1 [json_name = "version"];
+  .google.protobuf.Struct metadata = 2 [json_name = "metadata"];
+}
+message Extension {
+  string name = 1 [json_name = "name"];
+  string category = 2 [json_name = "category"];
+  string type_descriptor = 3 [json_name = "typeDescriptor"];
+  .envoy.config.core.v3.BuildVersion version = 4 [json_name = "version"];
+  bool disabled = 5 [json_name = "disabled"];
+  repeated string type_urls = 6 [json_name = "typeUrls"];
+}
+message Node {
+  string id = 1 [json_name = "id"];
+  string cluster = 2 [json_name = "cluster"];
+  .google.protobuf.Struct metadata = 3 [json_name = "metadata"];
+  map<string, .xds.core.v3.ContextParams> dynamic_parameters = 12 [json_name = "dynamicParameters"];
+  .envoy.config.core.v3.Locality locality = 4 [json_name = "locality"];
+  string user_agent_name = 6 [json_name = "userAgentName"];
+  repeated .envoy.config.core.v3.Extension extensions = 9 [json_name = "extensions"];
+  repeated string client_features = 10 [json_name = "clientFeatures"];
+  repeated .envoy.config.core.v3.Address listening_addresses = 11 [json_name = "listeningAddresses"];
+  oneof user_agent_version_type {
+    string user_agent_version = 7 [json_name = "userAgentVersion"];
+    .envoy.config.core.v3.BuildVersion user_agent_build_version = 8 [json_name = "userAgentBuildVersion"];
+  }
+}
+message Metadata {
+  map<string, .google.protobuf.Struct> filter_metadata = 1 [json_name = "filterMetadata"];
+  map<string, .google.protobuf.Any> typed_filter_metadata = 2 [json_name = "typedFilterMetadata"];
+}
+message RuntimeUInt32 {
+  uint32 default_value = 2 [json_name = "defaultValue"];
+  string runtime_key = 3 [json_name = "runtimeKey"];
+}
+message RuntimePercent {
+  .envoy.type.v3.Percent default_value = 1 [json_name = "defaultValue"];
+  string runtime_key = 2 [json_name = "runtimeKey"];
+}
+message RuntimeDouble {
+  double default_value = 1 [json_name = "defaultValue"];
+  string runtime_key = 2 [json_name = "runtimeKey"];
+}
+message RuntimeFeatureFlag {
+  .google.protobuf.BoolValue default_value = 1 [json_name = "defaultValue"];
+  string runtime_key = 2 [json_name = "runtimeKey"];
+}
+message KeyValue {
+  string key = 1 [json_name = "key"];
+  bytes value = 2 [json_name = "value"];
+}
+message KeyValuePair {
+  string key = 1 [json_name = "key"];
+  .google.protobuf.Value value = 2 [json_name = "value"];
+}
+message KeyValueAppend {
+  enum KeyValueAppendAction {
+    APPEND_IF_EXISTS_OR_ADD = 0;
+    ADD_IF_ABSENT = 1;
+    OVERWRITE_IF_EXISTS_OR_ADD = 2;
+    OVERWRITE_IF_EXISTS = 3;
+  }
+  .envoy.config.core.v3.KeyValuePair record = 3 [json_name = "record"];
+  .envoy.config.core.v3.KeyValue entry = 1 [json_name = "entry"];
+  .envoy.config.core.v3.KeyValueAppend.KeyValueAppendAction action = 2 [json_name = "action"];
+}
+message KeyValueMutation {
+  .envoy.config.core.v3.KeyValueAppend append = 1 [json_name = "append"];
+  string remove = 2 [json_name = "remove"];
+}
+message QueryParameter {
+  string key = 1 [json_name = "key"];
+  string value = 2 [json_name = "value"];
+}
+message HeaderValue {
+  string key = 1 [json_name = "key"];
+  string value = 2 [json_name = "value"];
+  bytes raw_value = 3 [json_name = "rawValue"];
+}
+message HeaderValueOption {
+  enum HeaderAppendAction {
+    APPEND_IF_EXISTS_OR_ADD = 0;
+    ADD_IF_ABSENT = 1;
+    OVERWRITE_IF_EXISTS_OR_ADD = 2;
+    OVERWRITE_IF_EXISTS = 3;
+  }
+  .envoy.config.core.v3.HeaderValue header = 1 [json_name = "header"];
+  .google.protobuf.BoolValue append = 2 [json_name = "append"];
+  .envoy.config.core.v3.HeaderValueOption.HeaderAppendAction append_action = 3 [json_name = "appendAction"];
+  bool keep_empty_value = 4 [json_name = "keepEmptyValue"];
+}
+message HeaderMap {
+  repeated .envoy.config.core.v3.HeaderValue headers = 1 [json_name = "headers"];
+}
+message WatchedDirectory {
+  string path = 1 [json_name = "path"];
+}
+message DataSource {
+  .envoy.config.core.v3.WatchedDirectory watched_directory = 5 [json_name = "watchedDirectory"];
+  oneof specifier {
+    string filename = 1 [json_name = "filename"];
+    bytes inline_bytes = 2 [json_name = "inlineBytes"];
+    string inline_string = 3 [json_name = "inlineString"];
+    string environment_variable = 4 [json_name = "environmentVariable"];
+  }
+}
+message RetryPolicy {
+  message RetryPriority {
+    string name = 1 [json_name = "name"];
+    oneof config_type {
+      .google.protobuf.Any typed_config = 2 [json_name = "typedConfig"];
+    }
+  }
+  message RetryHostPredicate {
+    string name = 1 [json_name = "name"];
+    oneof config_type {
+      .google.protobuf.Any typed_config = 2 [json_name = "typedConfig"];
+    }
+  }
+  .envoy.config.core.v3.BackoffStrategy retry_back_off = 1 [json_name = "retryBackOff"];
+  .google.protobuf.UInt32Value num_retries = 2 [json_name = "numRetries"];
+  string retry_on = 3 [json_name = "retryOn"];
+  .envoy.config.core.v3.RetryPolicy.RetryPriority retry_priority = 4 [json_name = "retryPriority"];
+  repeated .envoy.config.core.v3.RetryPolicy.RetryHostPredicate retry_host_predicate = 5 [json_name = "retryHostPredicate"];
+  int64 host_selection_retry_max_attempts = 6 [json_name = "hostSelectionRetryMaxAttempts"];
+}
+message RemoteDataSource {
+  .envoy.config.core.v3.HttpUri http_uri = 1 [json_name = "httpUri"];
+  string sha256 = 2 [json_name = "sha256"];
+  .envoy.config.core.v3.RetryPolicy retry_policy = 3 [json_name = "retryPolicy"];
+}
+message AsyncDataSource {
+  oneof specifier {
+    .envoy.config.core.v3.DataSource local = 1 [json_name = "local"];
+    .envoy.config.core.v3.RemoteDataSource remote = 2 [json_name = "remote"];
+  }
+}
+message TransportSocket {
+  string name = 1 [json_name = "name"];
+  oneof config_type {
+    .google.protobuf.Any typed_config = 3 [json_name = "typedConfig"];
+  }
+}
+message RuntimeFractionalPercent {
+  .envoy.type.v3.FractionalPercent default_value = 1 [json_name = "defaultValue"];
+  string runtime_key = 2 [json_name = "runtimeKey"];
+}
+message ControlPlane {
+  string identifier = 1 [json_name = "identifier"];
+}

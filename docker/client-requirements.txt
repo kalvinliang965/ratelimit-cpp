@@ -1,0 +1,3 @@
+grpcio==1.62.3
+protobuf==4.25.3
+redis==5.0.4

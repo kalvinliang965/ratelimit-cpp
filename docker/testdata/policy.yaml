@@ -1,0 +1,31 @@
+domain: docker
+descriptors:
+  - key: user
+    rate_limit:
+      unit: minute
+      requests_per_unit: 3
+  - key: service
+    value: api
+    descriptors:
+      - key: user
+        rate_limit:
+          unit: minute
+          requests_per_unit: 2
+  - key: blocked
+    rate_limit:
+      unit: minute
+      requests_per_unit: 0
+  - key: unlimited
+    rate_limit:
+      unlimited: true
+  - key: shadow
+    shadow_mode: true
+    rate_limit:
+      unit: minute
+      requests_per_unit: 1
+  # The restart assertion uses an hour window so a test starting near an epoch
+  # minute cannot lose its quota to ordinary expiry before the service returns.
+  - key: persistent
+    rate_limit:
+      unit: hour
+      requests_per_unit: 1

@@ -1,0 +1,7 @@
+This C++ implementation derives behavior and API definitions from
+github.com/envoyproxy/ratelimit in the adjacent checkout.
+Copyright Envoy Authors and contributors. Licensed under Apache License 2.0.
+See LICENSE. The vendored protocol definitions derive from Envoy, the rate limit
+service, Google APIs and xDS (Apache License 2.0).
+proto/reference.pb records the exact source schema, including annotations;
+the generated .proto files omit build-time annotations without changing wire fields.

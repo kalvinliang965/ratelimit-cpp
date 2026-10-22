@@ -1,0 +1,79 @@
+name: ratelimit-cpp-validation
+
+services:
+  redis-cpp:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 1s
+      retries: 20
+
+  redis-go:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 1s
+      retries: 20
+
+  ratelimit-cpp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      redis-cpp:
+        condition: service_healthy
+    volumes:
+      - ./docker/testdata:/data/ratelimit/config:ro
+    environment: &ratelimit_environment
+      BACKEND_TYPE: redis
+      CACHE_KEY_PREFIX: ""
+      CONFIG_TYPE: FILE
+      DISABLE_STATS: "true"
+      EXPIRATION_JITTER_MAX_SECONDS: "0"
+      GRPC_HOST: 0.0.0.0
+      GRPC_PORT: "8081"
+      HOST: 0.0.0.0
+      LIMIT_PER_UNIT_HEADERS_ENABLED: "true"
+      LIMIT_REQUEST_HEADERS_ENABLED: "true"
+      LIMIT_RESPONSE_HEADERS_ENABLED: "true"
+      LOCAL_CACHE_SIZE_IN_BYTES: "0"
+      LOG_LEVEL: error
+      PORT: "8080"
+      REDIS_SOCKET_TYPE: tcp
+      REDIS_STARTUP_MAX_ELAPSED_TIME: 10s
+      REDIS_TIMEOUT: 2s
+      REDIS_TYPE: SINGLE
+      REDIS_URL: redis-cpp:6379
+      RUNTIME_APPDIRECTORY: config
+      RUNTIME_IGNOREDOTFILES: "true"
+      RUNTIME_ROOT: /data
+      RUNTIME_SUBDIRECTORY: ratelimit
+      RUNTIME_WATCH_ROOT: "false"
+
+  ratelimit-go:
+    build:
+      context: ../ratelimit
+      dockerfile: Dockerfile
+    command: /bin/ratelimit
+    depends_on:
+      redis-go:
+        condition: service_healthy
+    volumes:
+      - ./docker/testdata:/data/ratelimit/config:ro
+    environment:
+      <<: *ratelimit_environment
+      REDIS_URL: redis-go:6379
+
+  client:
+    build:
+      context: .
+      dockerfile: docker/client.Dockerfile
+    depends_on:
+      ratelimit-cpp:
+        condition: service_started
+      ratelimit-go:
+        condition: service_started

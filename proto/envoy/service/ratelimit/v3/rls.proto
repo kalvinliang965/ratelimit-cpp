@@ -1,0 +1,59 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.service.ratelimit.v3;
+import "envoy/config/core/v3/base.proto";
+import "envoy/extensions/common/ratelimit/v3/ratelimit.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+message RateLimitRequest {
+  string domain = 1 [json_name = "domain"];
+  repeated .envoy.extensions.common.ratelimit.v3.RateLimitDescriptor descriptors = 2 [json_name = "descriptors"];
+  uint32 hits_addend = 3 [json_name = "hitsAddend"];
+}
+message RateLimitResponse {
+  enum Code {
+    UNKNOWN = 0;
+    OK = 1;
+    OVER_LIMIT = 2;
+  }
+  message RateLimit {
+    enum Unit {
+      UNKNOWN = 0;
+      SECOND = 1;
+      MINUTE = 2;
+      HOUR = 3;
+      DAY = 4;
+      WEEK = 7;
+      MONTH = 5;
+      YEAR = 6;
+    }
+    string name = 3 [json_name = "name"];
+    uint32 requests_per_unit = 1 [json_name = "requestsPerUnit"];
+    .envoy.service.ratelimit.v3.RateLimitResponse.RateLimit.Unit unit = 2 [json_name = "unit"];
+  }
+  message Quota {
+    uint32 requests = 1 [json_name = "requests"];
+    string id = 3 [json_name = "id"];
+    oneof expiration_specifier {
+      .google.protobuf.Timestamp valid_until = 2 [json_name = "validUntil"];
+    }
+  }
+  message DescriptorStatus {
+    .envoy.service.ratelimit.v3.RateLimitResponse.Code code = 1 [json_name = "code"];
+    .envoy.service.ratelimit.v3.RateLimitResponse.RateLimit current_limit = 2 [json_name = "currentLimit"];
+    uint32 limit_remaining = 3 [json_name = "limitRemaining"];
+    .google.protobuf.Duration duration_until_reset = 4 [json_name = "durationUntilReset"];
+    .envoy.service.ratelimit.v3.RateLimitResponse.Quota quota = 5 [json_name = "quota"];
+  }
+  .envoy.service.ratelimit.v3.RateLimitResponse.Code overall_code = 1 [json_name = "overallCode"];
+  repeated .envoy.service.ratelimit.v3.RateLimitResponse.DescriptorStatus statuses = 2 [json_name = "statuses"];
+  repeated .envoy.config.core.v3.HeaderValue response_headers_to_add = 3 [json_name = "responseHeadersToAdd"];
+  repeated .envoy.config.core.v3.HeaderValue request_headers_to_add = 4 [json_name = "requestHeadersToAdd"];
+  bytes raw_body = 5 [json_name = "rawBody"];
+  .google.protobuf.Struct dynamic_metadata = 6 [json_name = "dynamicMetadata"];
+  .envoy.service.ratelimit.v3.RateLimitResponse.Quota quota = 7 [json_name = "quota"];
+}
+service RateLimitService {
+  rpc ShouldRateLimit (.envoy.service.ratelimit.v3.RateLimitRequest) returns (.envoy.service.ratelimit.v3.RateLimitResponse);
+}

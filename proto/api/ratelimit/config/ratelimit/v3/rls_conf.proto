@@ -1,0 +1,39 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package ratelimit.config.ratelimit.v3;
+import "google/protobuf/struct.proto";
+enum RateLimitUnit {
+  UNKNOWN = 0;
+  SECOND = 1;
+  MINUTE = 2;
+  HOUR = 3;
+  DAY = 4;
+  WEEK = 7;
+  MONTH = 5;
+  YEAR = 6;
+}
+message RateLimitConfig {
+  string name = 1 [json_name = "name"];
+  string domain = 2 [json_name = "domain"];
+  repeated .ratelimit.config.ratelimit.v3.RateLimitDescriptor descriptors = 3 [json_name = "descriptors"];
+}
+message RateLimitDescriptor {
+  string key = 1 [json_name = "key"];
+  string value = 2 [json_name = "value"];
+  .ratelimit.config.ratelimit.v3.RateLimitPolicy rate_limit = 3 [json_name = "rateLimit"];
+  repeated .ratelimit.config.ratelimit.v3.RateLimitDescriptor descriptors = 4 [json_name = "descriptors"];
+  bool shadow_mode = 5 [json_name = "shadowMode"];
+  bool detailed_metric = 6 [json_name = "detailedMetric"];
+  bool quota_mode = 7 [json_name = "quotaMode"];
+  .google.protobuf.Struct metadata = 8 [json_name = "metadata"];
+}
+message RateLimitPolicy {
+  .ratelimit.config.ratelimit.v3.RateLimitUnit unit = 1 [json_name = "unit"];
+  uint32 requests_per_unit = 2 [json_name = "requestsPerUnit"];
+  bool unlimited = 3 [json_name = "unlimited"];
+  string name = 4 [json_name = "name"];
+  repeated .ratelimit.config.ratelimit.v3.RateLimitReplace replaces = 5 [json_name = "replaces"];
+}
+message RateLimitReplace {
+  string name = 1 [json_name = "name"];
+}

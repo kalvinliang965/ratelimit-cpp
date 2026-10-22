@@ -1,0 +1,6 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package xds.core.v3;
+message ContextParams {
+  map<string, string> params = 1 [json_name = "params"];
+}

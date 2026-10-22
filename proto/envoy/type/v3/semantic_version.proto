@@ -1,0 +1,8 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.type.v3;
+message SemanticVersion {
+  uint32 major_number = 1 [json_name = "majorNumber"];
+  uint32 minor_number = 2 [json_name = "minorNumber"];
+  uint32 patch = 3 [json_name = "patch"];
+}

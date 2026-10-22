@@ -1,0 +1,9 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package google.rpc;
+import "google/protobuf/any.proto";
+message Status {
+  int32 code = 1 [json_name = "code"];
+  string message = 2 [json_name = "message"];
+  repeated .google.protobuf.Any details = 3 [json_name = "details"];
+}

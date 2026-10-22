@@ -1,0 +1,36 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.extensions.common.ratelimit.v3;
+import "envoy/type/v3/ratelimit_unit.proto";
+import "envoy/type/v3/token_bucket.proto";
+import "google/protobuf/wrappers.proto";
+enum XRateLimitHeadersRFCVersion {
+  OFF = 0;
+  DRAFT_VERSION_03 = 1;
+}
+enum VhRateLimitsOptions {
+  OVERRIDE = 0;
+  INCLUDE = 1;
+  IGNORE = 2;
+}
+message RateLimitDescriptor {
+  message Entry {
+    string key = 1 [json_name = "key"];
+    string value = 2 [json_name = "value"];
+  }
+  message RateLimitOverride {
+    uint32 requests_per_unit = 1 [json_name = "requestsPerUnit"];
+    .envoy.type.v3.RateLimitUnit unit = 2 [json_name = "unit"];
+  }
+  repeated .envoy.extensions.common.ratelimit.v3.RateLimitDescriptor.Entry entries = 1 [json_name = "entries"];
+  .envoy.extensions.common.ratelimit.v3.RateLimitDescriptor.RateLimitOverride limit = 2 [json_name = "limit"];
+  .google.protobuf.UInt64Value hits_addend = 3 [json_name = "hitsAddend"];
+  bool is_negative_hits = 4 [json_name = "isNegativeHits"];
+}
+message LocalRateLimitDescriptor {
+  repeated .envoy.extensions.common.ratelimit.v3.RateLimitDescriptor.Entry entries = 1 [json_name = "entries"];
+  .envoy.type.v3.TokenBucket token_bucket = 2 [json_name = "tokenBucket"];
+  bool shadow_mode = 3 [json_name = "shadowMode"];
+}
+message LocalClusterRateLimit {
+}

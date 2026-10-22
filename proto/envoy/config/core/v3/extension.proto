@@ -1,0 +1,8 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.config.core.v3;
+import "google/protobuf/any.proto";
+message TypedExtensionConfig {
+  string name = 1 [json_name = "name"];
+  .google.protobuf.Any typed_config = 2 [json_name = "typedConfig"];
+}

@@ -1,0 +1,91 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.service.discovery.v3;
+import "envoy/config/core/v3/base.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/rpc/status.proto";
+message ResourceLocator {
+  string name = 1 [json_name = "name"];
+  map<string, string> dynamic_parameters = 2 [json_name = "dynamicParameters"];
+}
+message ResourceName {
+  string name = 1 [json_name = "name"];
+  .envoy.service.discovery.v3.DynamicParameterConstraints dynamic_parameter_constraints = 2 [json_name = "dynamicParameterConstraints"];
+}
+message ResourceError {
+  .envoy.service.discovery.v3.ResourceName resource_name = 1 [json_name = "resourceName"];
+  .google.rpc.Status error_detail = 2 [json_name = "errorDetail"];
+}
+message DiscoveryRequest {
+  string version_info = 1 [json_name = "versionInfo"];
+  .envoy.config.core.v3.Node node = 2 [json_name = "node"];
+  repeated string resource_names = 3 [json_name = "resourceNames"];
+  repeated .envoy.service.discovery.v3.ResourceLocator resource_locators = 7 [json_name = "resourceLocators"];
+  string type_url = 4 [json_name = "typeUrl"];
+  string response_nonce = 5 [json_name = "responseNonce"];
+  .google.rpc.Status error_detail = 6 [json_name = "errorDetail"];
+}
+message DiscoveryResponse {
+  string version_info = 1 [json_name = "versionInfo"];
+  repeated .google.protobuf.Any resources = 2 [json_name = "resources"];
+  bool canary = 3 [json_name = "canary"];
+  string type_url = 4 [json_name = "typeUrl"];
+  string nonce = 5 [json_name = "nonce"];
+  .envoy.config.core.v3.ControlPlane control_plane = 6 [json_name = "controlPlane"];
+  repeated .envoy.service.discovery.v3.ResourceError resource_errors = 7 [json_name = "resourceErrors"];
+}
+message DeltaDiscoveryRequest {
+  .envoy.config.core.v3.Node node = 1 [json_name = "node"];
+  string type_url = 2 [json_name = "typeUrl"];
+  repeated string resource_names_subscribe = 3 [json_name = "resourceNamesSubscribe"];
+  repeated string resource_names_unsubscribe = 4 [json_name = "resourceNamesUnsubscribe"];
+  repeated .envoy.service.discovery.v3.ResourceLocator resource_locators_subscribe = 8 [json_name = "resourceLocatorsSubscribe"];
+  repeated .envoy.service.discovery.v3.ResourceLocator resource_locators_unsubscribe = 9 [json_name = "resourceLocatorsUnsubscribe"];
+  map<string, string> initial_resource_versions = 5 [json_name = "initialResourceVersions"];
+  string response_nonce = 6 [json_name = "responseNonce"];
+  .google.rpc.Status error_detail = 7 [json_name = "errorDetail"];
+}
+message DeltaDiscoveryResponse {
+  string system_version_info = 1 [json_name = "systemVersionInfo"];
+  repeated .envoy.service.discovery.v3.Resource resources = 2 [json_name = "resources"];
+  string type_url = 4 [json_name = "typeUrl"];
+  repeated string removed_resources = 6 [json_name = "removedResources"];
+  repeated .envoy.service.discovery.v3.ResourceName removed_resource_names = 8 [json_name = "removedResourceNames"];
+  string nonce = 5 [json_name = "nonce"];
+  .envoy.config.core.v3.ControlPlane control_plane = 7 [json_name = "controlPlane"];
+  repeated .envoy.service.discovery.v3.ResourceError resource_errors = 9 [json_name = "resourceErrors"];
+}
+message DynamicParameterConstraints {
+  message SingleConstraint {
+    message Exists {
+    }
+    string key = 1 [json_name = "key"];
+    oneof constraint_type {
+      string value = 2 [json_name = "value"];
+      .envoy.service.discovery.v3.DynamicParameterConstraints.SingleConstraint.Exists exists = 3 [json_name = "exists"];
+    }
+  }
+  message ConstraintList {
+    repeated .envoy.service.discovery.v3.DynamicParameterConstraints constraints = 1 [json_name = "constraints"];
+  }
+  oneof type {
+    .envoy.service.discovery.v3.DynamicParameterConstraints.SingleConstraint constraint = 1 [json_name = "constraint"];
+    .envoy.service.discovery.v3.DynamicParameterConstraints.ConstraintList or_constraints = 2 [json_name = "orConstraints"];
+    .envoy.service.discovery.v3.DynamicParameterConstraints.ConstraintList and_constraints = 3 [json_name = "andConstraints"];
+    .envoy.service.discovery.v3.DynamicParameterConstraints not_constraints = 4 [json_name = "notConstraints"];
+  }
+}
+message Resource {
+  message CacheControl {
+    bool do_not_cache = 1 [json_name = "doNotCache"];
+  }
+  string name = 3 [json_name = "name"];
+  .envoy.service.discovery.v3.ResourceName resource_name = 8 [json_name = "resourceName"];
+  repeated string aliases = 4 [json_name = "aliases"];
+  string version = 1 [json_name = "version"];
+  .google.protobuf.Any resource = 2 [json_name = "resource"];
+  .google.protobuf.Duration ttl = 6 [json_name = "ttl"];
+  .envoy.service.discovery.v3.Resource.CacheControl cache_control = 7 [json_name = "cacheControl"];
+  .envoy.config.core.v3.Metadata metadata = 9 [json_name = "metadata"];
+}

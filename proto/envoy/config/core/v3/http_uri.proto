@@ -1,0 +1,11 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.config.core.v3;
+import "google/protobuf/duration.proto";
+message HttpUri {
+  string uri = 1 [json_name = "uri"];
+  .google.protobuf.Duration timeout = 3 [json_name = "timeout"];
+  oneof http_upstream_type {
+    string cluster = 2 [json_name = "cluster"];
+  }
+}

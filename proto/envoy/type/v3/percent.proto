@@ -1,0 +1,15 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.type.v3;
+message Percent {
+  double value = 1 [json_name = "value"];
+}
+message FractionalPercent {
+  enum DenominatorType {
+    HUNDRED = 0;
+    TEN_THOUSAND = 1;
+    MILLION = 2;
+  }
+  uint32 numerator = 1 [json_name = "numerator"];
+  .envoy.type.v3.FractionalPercent.DenominatorType denominator = 2 [json_name = "denominator"];
+}

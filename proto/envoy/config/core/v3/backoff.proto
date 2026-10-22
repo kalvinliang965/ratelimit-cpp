@@ -1,0 +1,8 @@
+// Derived from the pinned Go reference; see proto/reference.pb and NOTICE.
+syntax = "proto3";
+package envoy.config.core.v3;
+import "google/protobuf/duration.proto";
+message BackoffStrategy {
+  .google.protobuf.Duration base_interval = 1 [json_name = "baseInterval"];
+  .google.protobuf.Duration max_interval = 2 [json_name = "maxInterval"];
+}

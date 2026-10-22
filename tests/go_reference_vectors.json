@@ -1,0 +1,156 @@
+{
+  "format": "ratelimit-go-black-box-v1",
+  "vectors": [
+    {
+      "id": "go_integration_negative_hits",
+      "source": "ratelimit/test/integration/integration_test.go:TestNegativeHitsIntegration/testNegativeHits (lines 92-136)",
+      "config_files": [
+        "ratelimit/test/integration/runtime/current/ratelimit/config/basic.yaml"
+      ],
+      "atomic_second_window": true,
+      "steps": [
+        {
+          "request": {"domain": "basic", "hits_addend": 5, "descriptors": [{"entries": [["key1", "foo"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 50, "unit": "SECOND"}, "limit_remaining": 45, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "basic", "hits_addend": 1, "descriptors": [{"entries": [["key1", "foo"]], "hits_addend": 3, "is_negative_hits": true}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 50, "unit": "SECOND"}, "limit_remaining": 48, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "basic", "hits_addend": 1, "descriptors": [{"entries": [["key1", "foo"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 50, "unit": "SECOND"}, "limit_remaining": 47, "duration_until_reset": true}]}
+        }
+      ]
+    },
+    {
+      "id": "go_integration_basic_base_sequence",
+      "source": "ratelimit/test/integration/integration_test.go:TestBasicConfig/testBasicBaseConfig (lines 138-154, 657-888), Redis/no-local-cache branch",
+      "config_files": [
+        "ratelimit/test/integration/runtime/current/ratelimit/config/basic.yaml",
+        "ratelimit/test/integration/runtime/current/ratelimit/config/another.yaml"
+      ],
+      "steps": [
+        {
+          "request": {"domain": "foo", "hits_addend": 1, "descriptors": [{"entries": [["hello", "world"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}
+        },
+        {
+          "request": {"domain": "basic", "hits_addend": 1, "descriptors": [{"entries": [["key1", "foo"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 50, "unit": "SECOND"}, "limit_remaining": 49, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "another", "hits_addend": 1, "descriptors": [{"entries": [["key2", "go-vector-minute"]]}]},
+          "repeat": 25
+        },
+        {
+          "request": {"domain": "another", "hits_addend": 1, "descriptors": [{"entries": [["key2", "go-vector-pair"]]}, {"entries": [["key3", "go-vector-pair"]]}]},
+          "repeat": 15
+        }
+      ]
+    },
+    {
+      "id": "go_config_basic_yaml",
+      "source": "ratelimit/test/config/config_test.go:TestBasicConfig and TestConfigLimitOverride (lines 30-226, 256-335); uses the original basic_config.yaml fixture",
+      "config_files": [
+        "ratelimit/test/config/basic_config.yaml"
+      ],
+      "atomic_second_window": true,
+      "steps": [
+        {
+          "request": {"domain": "foo_domain", "hits_addend": 1, "descriptors": [{"entries": [["key1", "value1"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key1", "value1"], ["subkey1", "something"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 5, "unit": "SECOND"}, "limit_remaining": 4, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key1", "value1"], ["subkey1", "subvalue1"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 10, "unit": "SECOND"}, "limit_remaining": 9, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key2", "value2"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 30, "unit": "MINUTE"}, "limit_remaining": 29, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key2", "value3"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key1", "value1"], ["subkey1", "something"]], "limit": {"requests_per_unit": 10, "unit": "DAY"}}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 10, "unit": "DAY"}, "limit_remaining": 9, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key3", "foo"]]}]},
+          "repeat": 2,
+          "expect_when": "last",
+          "expect": {"overall_code": "OVER_LIMIT", "statuses": [{"code": "OVER_LIMIT", "current_limit": {"requests_per_unit": 1, "unit": "HOUR"}, "limit_remaining": 0, "duration_until_reset": true}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key6", "unlimited"]]}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key7", "unspecified_value"]]}]}
+        },
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key8", "month"]]}]}
+        }
+      ]
+    },
+    {
+      "id": "go_config_wildcard_yaml",
+      "source": "ratelimit/test/config/config_test.go:TestWildcardConfig (lines 576-710); uses the original wildcard.yaml fixture",
+      "config_files": [
+        "ratelimit/test/config/wildcard.yaml"
+      ],
+      "steps": [
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["noVal", "foo1"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["noVal", "foo2"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["wild", "foo1"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["wild", "foo2"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["nestedWild", "val1"], ["wild", "goo2"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["wild", "bar"]]}]}, "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["midWild", "barab"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["midWild", "bar123b"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["midWild", "barb"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["midWild", "bara"]]}]}, "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["multiWild", "foo123bar456baz"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["multiWild", "foobarbaz"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["multiWild", "foo123baz"]]}]}, "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": null, "limit_remaining": 0, "duration_until_reset": false}]}}
+      ]
+    },
+    {
+      "id": "go_config_share_threshold_yaml",
+      "source": "ratelimit/test/config/config_test.go:TestShareThreshold (lines 1669-1980) and test/limiter/base_limiter_test.go:TestGenerateCacheKeysWithShareThreshold; uses original share_threshold.yaml",
+      "config_files": [
+        "ratelimit/test/config/share_threshold.yaml"
+      ],
+      "steps": [
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["files", "files/a.pdf"]]}]}, "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 100, "unit": "MINUTE"}, "limit_remaining": 99, "duration_until_reset": true}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["files", "files/b.csv"]]}]}, "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 100, "unit": "MINUTE"}, "limit_remaining": 98, "duration_until_reset": true}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["nested", "parent"], ["files", "nested/file-a"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["nested", "parent"], ["files", "nested/file-b"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["route", "api/v1"], ["method", "GET"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["service", "svc/user"], ["endpoint", "get"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["midpath", "/api/v1"]]}]}},
+        {"request": {"domain": "test-domain", "descriptors": [{"entries": [["multiroute", "svcfooepbarrpc"]]}]}}
+      ]
+    },
+    {
+      "id": "go_config_merge_domain_yaml",
+      "source": "ratelimit/test/config/config_test.go:TestDomainMerge (lines 227-255); uses original merge_domain_key1.yaml and merge_domain_key2.yaml",
+      "config_files": [
+        "ratelimit/test/config/merge_domain_key1.yaml",
+        "ratelimit/test/config/merge_domain_key2.yaml"
+      ],
+      "environment": {"MERGE_DOMAIN_CONFIG": "true"},
+      "steps": [
+        {
+          "request": {"domain": "test-domain", "hits_addend": 1, "descriptors": [{"entries": [["key1", "value1"]]}, {"entries": [["key2", "value2"]]}]},
+          "expect": {"overall_code": "OK", "statuses": [{"code": "OK", "current_limit": {"requests_per_unit": 10, "unit": "MINUTE"}, "limit_remaining": 9, "duration_until_reset": true}, {"code": "OK", "current_limit": {"requests_per_unit": 20, "unit": "MINUTE"}, "limit_remaining": 19, "duration_until_reset": true}]}
+        }
+      ]
+    }
+  ]
+}
