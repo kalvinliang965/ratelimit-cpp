@@ -197,7 +197,10 @@ class FileProvider {
       std::cerr << "configuration rejected: " << e.what() << '\n';
     }
   }
-  Service& service_; fs::path path_; Documents previous_; bool seen_ = false;
+  Service& service_; 
+  fs::path path_; 
+  Documents previous_; 
+  bool seen_ = false; 
   std::atomic<bool> stop_{false}; std::thread worker_;
 };
 
@@ -340,6 +343,143 @@ void resolveOptions(Options& opts) {
     }
 }
 
+
+void run_grpc_client(Options& opts) {
+	assert(!opts.client.empty());
+	Request req; Response res;
+	auto parsed=google::protobuf::util::JsonStringToMessage(opts.request,&req);
+	if(!parsed.ok()) throw std::runtime_error(parsed.ToString());
+	auto stub=pb::RateLimitService::NewStub(grpc::CreateChannel(opts.client,grpc::InsecureChannelCredentials()));
+	grpc::ClientContext context;
+	context.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(10));
+	auto status=stub->ShouldRateLimit(&context,req,&res);
+	if(!status.ok()) throw std::runtime_error(status.error_message());
+	std::string json; google::protobuf::util::MessageToJsonString(res,&json);
+	std::cout<<json<<'\n';
+	return;
+}
+
+void run_grpc_server(
+	Service& service,
+	Options& opts,
+	std::function<bool()> healthy
+) {
+	const auto grpc_uds=env("GRPC_UDS"); // client socket
+			
+	const auto client_ca=env("GRPC_CLIENT_TLS_CACERT"); 
+	const auto require_client_san=!env("GRPC_CLIENT_TLS_SAN").empty();
+	const auto tls_san_proxy=envBool("GRPC_SERVER_USE_TLS") && require_client_san && !client_ca.empty();
+
+	std::unique_ptr<PrivateUnixSocket> tls_proxy_upstream;
+	if (tls_san_proxy) tls_proxy_upstream=std::make_unique<PrivateUnixSocket>();
+
+	const std::string grpc_host = env("GRPC_HOST", "0.0.0.0");
+	const uint64_t grpc_port = envInt("GRPC_PORT", 8081);
+	const auto grpc_client_address = address(grpc_host, grpc_port);
+	const auto listen = grpc_uds.empty() ? grpc_client_address : "unix:" + grpc_uds;
+
+	grpc::ServerBuilder builder;
+ 	builder.AddChannelArgument(GRPC_ARG_ENABLE_PER_MESSAGE_COMPRESSION,0);
+	builder.AddChannelArgument(GRPC_ARG_ENABLE_PER_MESSAGE_DECOMPRESSION,1);
+	builder.SetCompressionAlgorithmSupportStatus(GRPC_COMPRESS_DEFLATE,false);
+	builder.SetCompressionAlgorithmSupportStatus(GRPC_COMPRESS_GZIP,true);
+	builder.AddChannelArgument(GRPC_ARG_MAX_CONNECTION_AGE_MS,static_cast<int>(durationMillis(env("GRPC_MAX_CONNECTION_AGE","24h"))));
+	builder.AddChannelArgument(GRPC_ARG_MAX_CONNECTION_AGE_GRACE_MS,static_cast<int>(durationMillis(env("GRPC_MAX_CONNECTION_AGE_GRACE","1h"))));
+	builder.SetMaxReceiveMessageSize(4*1024*1024);
+	RawGrpcService grpc_service(service);
+	HealthService health_service;
+	health_service.setServing(healthy());
+	auto completion_queue=builder.AddCompletionQueue();
+	if(tls_san_proxy)  {
+		builder.AddListeningPort(tls_proxy_upstream->grpcAddress(),grpc::InsecureServerCredentials());
+	} else {
+		builder.AddListeningPort(listen,credentials());
+	}
+	builder.RegisterService(&grpc_service); builder.RegisterService(&health_service);
+
+	auto server = builder.BuildAndStart();
+	if(!server) {
+		throw std::runtime_error("cannot start gRPC server at "+listen);
+	}
+	if(tls_san_proxy) {
+		tls_proxy_upstream->lockDownSocket();
+	}
+	grpc_service.start(completion_queue.get());
+	std::unique_ptr<TlsProxy> tls_proxy;
+	if(tls_san_proxy) {
+		TlsProxyConfig proxy_config;
+		if(grpc_uds.empty()) {
+			proxy_config.listen_host=env("GRPC_HOST","0.0.0.0");
+			proxy_config.listen_port=static_cast<uint16_t>(envInt("GRPC_PORT",8081));
+		} else {
+			proxy_config.listen_unix_socket=grpc_uds;
+		}
+		proxy_config.upstream_unix_socket=tls_proxy_upstream->socketPath().string();
+		proxy_config.server_certificate=env("GRPC_SERVER_TLS_CERT");
+		proxy_config.server_private_key=env("GRPC_SERVER_TLS_KEY");
+		proxy_config.client_ca_certificate=client_ca;
+		proxy_config.required_client_san=env("GRPC_CLIENT_TLS_SAN");
+		tls_proxy=std::make_unique<TlsProxy>(std::move(proxy_config));
+		try { tls_proxy->start(); }
+		catch(...) {
+			server->Shutdown(std::chrono::system_clock::now()+std::chrono::seconds(5));
+			completion_queue->Shutdown(); grpc_service.join(); server->Wait(); throw;
+		}
+	}
+	while(!quit) { 
+		health_service.setServing(healthy());
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+	if(tls_proxy) tls_proxy->stop();
+	health_service.shutdown();
+	server->Shutdown(std::chrono::system_clock::now()+std::chrono::seconds(5));
+	completion_queue->Shutdown();
+	grpc_service.join();
+	server->Wait();
+	if(tls_proxy_upstream) tls_proxy_upstream->cleanup();
+}
+
+void run_server(Options& opts) {
+	Service service;
+	std::unique_ptr<FileProvider> files;
+	// std::unique_ptr<XdsProvider> xds;
+	auto type = env("CONFIG_TYPE", "FILE");
+	if (type == "FILE") {
+		// FileProvider constantly poll if data has change and update
+		// config inside service.
+		files = std::make_unique<FileProvider>(service, opts.config_path);
+		files->start();
+	} else if (type == "GRPC_XDS_SOTW") {
+		// TODO: receive configuration from remote xds server
+		// xds=std::make_unique_ptr<XdsProvider>(service);
+		// xds->start();
+	} else {
+		throw std::runtime_error("invalid CONFIG_TYPE: " + type);
+	}
+	// TODO: ???? 
+	if (quit) return;
+
+	auto healthy=[&]() {
+		auto config = service.getConfig();
+		return !quit && service.backendHealthy() &&
+			(
+				!envBool("HEALTHY_WITH_AT_LEAST_ONE_CONFIG_LOADED") || 
+				(config && !config->empty())
+			);
+	};
+	const std::string rpc_transport = env("RPC_TRANSPORT", "GRPC");
+	if (rpc_transport == "GRPC") {
+		run_grpc_server(service, opts, healthy);
+	} else if (rpc_transport == "XRPC") {
+		std::cout << "TODO" << std::endl;
+		return;
+	} else {
+		throw std::runtime_error("invalid rpc_transport: " + rpc_transport);
+	}
+	// if(xds) xds->stop();
+	return;
+}
+
 void dispatch(Options& opts) {
 	switch(opts.command) {
 	case Command::HELP: {
@@ -356,22 +496,12 @@ void dispatch(Options& opts) {
 		return;
 	} 
 	case Command::GRPC_CLIENT: {
-		assert(!opts.client.empty());
-		Request req; Response res;
-		auto parsed=google::protobuf::util::JsonStringToMessage(opts.request,&req);
-		if(!parsed.ok()) throw std::runtime_error(parsed.ToString());
-		auto stub=pb::RateLimitService::NewStub(grpc::CreateChannel(opts.client,grpc::InsecureChannelCredentials()));
-		grpc::ClientContext context;
-		context.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(10));
-		auto status=stub->ShouldRateLimit(&context,req,&res);
-		if(!status.ok()) throw std::runtime_error(status.error_message());
-		std::string json; google::protobuf::util::MessageToJsonString(res,&json);
-		std::cout<<json<<'\n';
+		run_grpc_client(opts);
 		return;
 	}
 	case Command::SERVER:
 	default:
-		std::cout << "TODO" << std::endl;
+		run_server(opts);
 		return;
 	}
 }
