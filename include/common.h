@@ -5,13 +5,16 @@
 #include <stdexcept>
 #include <algorithm>
 #include "envoy/service/ratelimit/v3/rls.pb.h"
+
 namespace rlc {
 namespace pb = envoy::service::ratelimit::v3;
 namespace common = envoy::extensions::common::ratelimit::v3;
+
 using Request = pb::RateLimitRequest;
 using Response = pb::RateLimitResponse;
 using Descriptor = common::RateLimitDescriptor;
 using Unit = pb::RateLimitResponse_RateLimit_Unit;
+
 inline std::string env(const char* key, const std::string& fallback = "") {
   const char* value = std::getenv(key); return value ? value : fallback;
 }

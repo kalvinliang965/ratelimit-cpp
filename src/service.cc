@@ -351,21 +351,30 @@ void Service::recordConfigLoad(bool success) {
   impl_->stats.add(success ? "ratelimit.service.config_load_success" : "ratelimit.service.config_load_error");
 }
 std::string Service::statsDump() const { return impl_->stats.dump(); }
+
+
+
 grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request* request, Response* response) {
   try {
     if (request->domain().empty()) return {grpc::StatusCode::UNKNOWN, "rate limit domain must not be empty"};
     if (request->descriptors().empty()) return {grpc::StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"};
     std::shared_ptr<Config> config;
+
     ResponseSettings settings;
     {
       std::lock_guard<std::mutex> lock(impl_->config_mutex);
-      config = impl_->config; settings = impl_->settings;
+      config = impl_->config; 
+      settings = impl_->settings;
     }
     if (!config) return {grpc::StatusCode::UNKNOWN, "no rate limit configuration loaded"};
+
     const int count = request->descriptors_size();
+
+    //  go code
     std::vector<std::optional<Limit>> limits(count);
     std::vector<bool> unlimited(count);
     std::unordered_set<std::string> replaces;
+
     for (int i = 0; i < count; ++i) {
       limits[i] = config->find(request->domain(), request->descriptors(i));
       if (limits[i]) {
@@ -373,7 +382,13 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
         if (limits[i]->unlimited) { unlimited[i] = true; limits[i].reset(); }
       }
     }
-    for (auto& limit : limits) if (limit && !limit->limit.name().empty() && replaces.count(limit->limit.name())) limit.reset();
+
+    for (auto& limit : limits) {
+	if (limit && !limit->limit.name().empty() && replaces.count(limit->limit.name())) {
+		limit.reset();
+	}
+    }
+
     const auto statuses = impl_->limit(*request, limits);
     uint32_t min_remaining = std::numeric_limits<uint32_t>::max();
     const Status* minimum = nullptr;
