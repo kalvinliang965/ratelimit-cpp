@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 // Numeric values match the descriptor override's protobuf RateLimitUnit.
 enum class RateLimitUnit : int32_t {
@@ -40,7 +41,7 @@ enum class RateLimitStatusCode : int32_t {
 struct RateLimitStatus {
 	RateLimitStatusCode code_;
 	std::string message_;
-	const RateLimitStatusCode code() const {
+	RateLimitStatusCode code() const {
 		return code_;
 	}
 	const std::string& message() const {

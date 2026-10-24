@@ -8,18 +8,18 @@
 namespace rlc::grpc_conversion {
 
 
-Status FromProto(const GrpcStatus& status) {
-	return Status(static_cast<StatusCode>(status.error_code()), status.error_message());
+RateLimitStatus FromProto(const GrpcRateLimitStatus& status) {
+	return RateLimitStatus(static_cast<RateLimitStatusCode>(status.error_code()), status.error_message());
 }
 
-GrpcStatus ToProto(const Status& status) { 
-	return GrpcStatus(
+GrpcRateLimitStatus ToProto(const RateLimitStatus& status) {
+	return GrpcRateLimitStatus(
 		static_cast<grpc::StatusCode>(status.code()),
 		status.message()
 	    );
 }
 
-RateLimitDescriptor FromProto(const common::RateLimitDescriptor& source) {
+RateLimitDescriptor FromProto(const GrpcRateLimitDescriptor& source) {
     RateLimitDescriptor result;
     result.entries_.reserve(source.entries_size());
     for (const auto& entry : source.entries()) {
@@ -38,8 +38,8 @@ RateLimitDescriptor FromProto(const common::RateLimitDescriptor& source) {
     return result;
 }
 
-common::RateLimitDescriptor ToProto(const RateLimitDescriptor& source) {
-    common::RateLimitDescriptor result;
+GrpcRateLimitDescriptor ToProto(const RateLimitDescriptor& source) {
+    GrpcRateLimitDescriptor result;
     for (const auto& entry : source.entries()) {
         auto* output = result.add_entries();
         output->set_key(entry.key());
@@ -57,8 +57,8 @@ common::RateLimitDescriptor ToProto(const RateLimitDescriptor& source) {
     return result;
 }
 
-Request FromProto(const GrpcRequest& request) {
-    Request result;
+RateLimitRequest FromProto(const GrpcRateLimitRequest& request) {
+    RateLimitRequest result;
     result.domain_ = request.domain();
     result.hits_addend_ = request.hits_addend();
     result.descriptors_.reserve(request.descriptors_size());
@@ -68,8 +68,8 @@ Request FromProto(const GrpcRequest& request) {
     return result;
 }
 
-GrpcRequest ToProto(const Request& request) {
-    GrpcRequest result;
+GrpcRateLimitRequest ToProto(const RateLimitRequest& request) {
+    GrpcRateLimitRequest result;
     result.set_domain(request.domain());
     result.set_hits_addend(request.hits_addend());
     for (const auto& descriptor : request.descriptors()) {
@@ -88,7 +88,7 @@ void TestDescriptorConversions() {
     using rlc::grpc_conversion::FromProto;
     using rlc::grpc_conversion::ToProto;
 
-    const auto empty = FromProto(rlc::common::RateLimitDescriptor{});
+    const auto empty = FromProto(rlc::GrpcRateLimitDescriptor{});
     assert(empty.entries().empty());
     assert(!empty.has_limit() && !empty.has_hits_addend());
     assert(!empty.is_negative_hits());
@@ -125,7 +125,7 @@ void TestDescriptorConversions() {
         assert(restored.is_negative_hits());
     }
 
-    rlc::common::RateLimitDescriptor present_zero;
+    rlc::GrpcRateLimitDescriptor present_zero;
     present_zero.mutable_limit();
     present_zero.mutable_hits_addend()->set_value(0);
     const auto native_zero = FromProto(present_zero);
@@ -134,16 +134,16 @@ void TestDescriptorConversions() {
     const auto proto_zero = ToProto(native_zero);
     assert(proto_zero.has_limit() && proto_zero.has_hits_addend());
     assert(proto_zero.SerializeAsString() == present_zero.SerializeAsString());
-    std::cout << "Descriptor conversion tests passed\n";
+    std::cout << "GrpcRateLimitDescriptor conversion tests passed\n";
 }
 
 int main() {
     TestDescriptorConversions();
     using rlc::grpc_conversion::FromProto;
-    using rlc::GrpcRequest;
+    using rlc::GrpcRateLimitRequest;
     using rlc::grpc_conversion::ToProto;
 
-    GrpcRequest request;
+    GrpcRateLimitRequest request;
     request.set_domain("messaging");
     request.set_hits_addend(3);
 
@@ -187,7 +187,7 @@ int main() {
     assert(!b.hits_addend_.has_value());
     assert(!b.is_negative_hits_);
 
-    const auto empty = FromProto(GrpcRequest{});
+    const auto empty = FromProto(GrpcRateLimitRequest{});
     assert(empty.domain_.empty());
     assert(empty.descriptors_.empty());
     assert(empty.hits_addend_ == 0);

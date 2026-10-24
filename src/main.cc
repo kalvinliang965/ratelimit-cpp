@@ -347,8 +347,8 @@ void resolveOptions(Options& opts) {
 void run_grpc_client(Options& opts) {
 	assert(!opts.client.empty());
 
-	GrpcRequest req; 
-	Response res;
+	GrpcRateLimitRequest req;
+	GrpcRateLimitResponse res;
 
 	auto parsed=google::protobuf::util::JsonStringToMessage(opts.request,&req);
 	if(!parsed.ok()) {

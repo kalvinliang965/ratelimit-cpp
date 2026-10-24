@@ -18,7 +18,7 @@ constexpr char kMalformedRequestError[] =
     "grpc: error unmarshalling request: proto:" "\xC2\xA0"
     "cannot parse invalid wire-format data";
 
-bool decode(const grpc::ByteBuffer& buffer, GrpcRequest* request) {
+bool decode(const grpc::ByteBuffer& buffer, GrpcRateLimitRequest* request) {
   std::vector<grpc::Slice> slices;
   if (!buffer.Dump(&slices).ok()) return false;
   std::string bytes;
@@ -28,7 +28,7 @@ bool decode(const grpc::ByteBuffer& buffer, GrpcRequest* request) {
   return request->ParseFromString(bytes);
 }
 
-grpc::ByteBuffer encode(const Response& response) {
+grpc::ByteBuffer encode(const GrpcRateLimitResponse& response) {
   std::string bytes;
   response.SerializeToString(&bytes);
   grpc::Slice slice(bytes.data(), bytes.size());
@@ -57,7 +57,7 @@ class RawGrpcService::Call {
       // Redis work for this call.
       new Call(owner_);
 
-      GrpcRequest request;
+      GrpcRateLimitRequest request;
       state_ = State::finish;
       if (!decode(request_, &request)) {
         responder_.FinishWithError(
@@ -65,9 +65,9 @@ class RawGrpcService::Call {
             this);
         return;
       }
-      Response response;
+      GrpcRateLimitResponse response;
       auto cpp_request = rlc::grpc_conversion::FromProto(request);
-      Status cpp_status = owner_->implementation_.ShouldRateLimit(&context_, &cpp_request, &response);
+      RateLimitStatus cpp_status = owner_->implementation_.ShouldRateLimit(&context_, &cpp_request, &response);
       const auto status = rlc::grpc_conversion::ToProto(cpp_status);
       if (!status.ok()) {
         responder_.FinishWithError(status, this);

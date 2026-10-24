@@ -15,7 +15,6 @@
 namespace rlc {
 namespace {
 
-using GrpcDescriptorStatus = pb::RateLimitResponse_DescriptorStatus;
 using Struct = google::protobuf::Struct;
 using Value = google::protobuf::Value;
 
@@ -25,7 +24,7 @@ constexpr auto OVER = pb::RateLimitResponse::OVER_LIMIT;
 int64_t nowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
-int64_t divider(Unit unit) {
+int64_t divider(GrpcRateLimitUnit unit) {
   switch (unit) {
     case pb::RateLimitResponse_RateLimit_Unit_SECOND: return 1;
     case pb::RateLimitResponse_RateLimit_Unit_MINUTE: return 60;
@@ -44,16 +43,16 @@ int64_t monthStart(int64_t now, bool next = false) {
   if (next) ++date.tm_mon;
   return timegm(&date);
 }
-int64_t reset(Unit unit, bool calendar) {
+int64_t reset(GrpcRateLimitUnit unit, bool calendar) {
   const auto now = nowSeconds();
   if (calendar && unit == pb::RateLimitResponse_RateLimit_Unit_MONTH) return monthStart(now, true)-now;
   const auto seconds = divider(unit); return seconds-now%seconds;
 }
-int64_t expiration(Unit unit, bool calendar) {
+int64_t expiration(GrpcRateLimitUnit unit, bool calendar) {
   if (calendar && unit == pb::RateLimitResponse_RateLimit_Unit_MONTH) return reset(unit, true);
   return divider(unit);
 }
-std::string keyFor(const Request& request, int index, const Limit& limit, int64_t now,
+std::string keyFor(const RateLimitRequest& request, int index, const Limit& limit, int64_t now,
                    const std::string& prefix, bool calendar) {
   std::string key = prefix + request.domain() + "_";
   const auto& entries = request.descriptors(index).entries();
@@ -66,7 +65,7 @@ std::string keyFor(const Request& request, int index, const Limit& limit, int64_
   else { const auto duration = divider(limit.limit.unit()); start = now/duration*duration; }
   return key + std::to_string(start);
 }
-std::string groupKey(const Descriptor& descriptor) {
+std::string groupKey(const GrpcRateLimitDescriptor& descriptor) {
   std::string backend, model, all;
   for (const auto& entry : descriptor.entries()) {
     if (entry.key() == "backend_name") backend = entry.value();
@@ -84,7 +83,7 @@ void mergeMetadata(Struct& destination, const Struct& source) {
       mergeMetadata(*found->second.mutable_struct_value(), value.struct_value());
   }
 }
-std::string overrideString(const Descriptor& descriptor) {
+std::string overrideString(const GrpcRateLimitDescriptor& descriptor) {
   const auto& limit = descriptor.limit();
   std::string value;
   if (limit.requests_per_unit()) value = "requests_per_unit:" + std::to_string(limit.requests_per_unit());
@@ -96,7 +95,7 @@ std::string overrideString(const Descriptor& descriptor) {
   }
   return value;
 }
-Struct metadataFor(const Request& request, const std::vector<int>& passed,
+Struct metadataFor(const RateLimitRequest& request, const std::vector<int>& passed,
                    const std::vector<std::optional<Limit>>& limits, bool quota) {
   Struct out;
   auto& fields = *out.mutable_fields();
@@ -209,7 +208,7 @@ struct Service::Impl {
     return true;
   }
 
-  void cache(const std::string& key, Unit unit) {
+  void cache(const std::string& key, GrpcRateLimitUnit unit) {
     if (!cache_budget) return;
     const size_t size = key.size()+24;
     // freecache reserves at least 512 KiB and rejects entries exceeding 1/1024
@@ -229,7 +228,7 @@ struct Service::Impl {
     local.emplace(key, LocalEntry{nowSeconds()+expiration(unit, calendar), size, lru.begin()});
     cache_bytes += size;
   }
-  int64_t ttl(Unit unit) {
+  int64_t ttl(GrpcRateLimitUnit unit) {
     int64_t value = expiration(unit, calendar);
     if (jitter_max > 0) {
       std::lock_guard<std::mutex> lock(random_mutex);
@@ -237,7 +236,7 @@ struct Service::Impl {
     }
     return value;
   }
-  std::vector<GrpcDescriptorStatus> limit(const Request& request, const std::vector<std::optional<Limit>>& limits) {
+  std::vector<GrpcRateLimitDescriptorStatus> limit(const RateLimitRequest& request, const std::vector<std::optional<Limit>>& limits) {
     const size_t count = limits.size();
 
     std::vector<std::string> keys(count);
@@ -311,7 +310,7 @@ struct Service::Impl {
         results[i] = negative[i] ? (before > hits[i] ? before-hits[i] : 0) : before+hits[i];
       }
     }
-    std::vector<GrpcDescriptorStatus> statuses(count);
+    std::vector<GrpcRateLimitDescriptorStatus> statuses(count);
 
     std::vector<MemcacheUpdate> updates;
     for (size_t i = 0; i < count; ++i) {
@@ -397,17 +396,17 @@ std::string Service::statsDump() const { return impl_->stats.dump(); }
 
 
 
-Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request* request, Response* response) {
+RateLimitStatus Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const RateLimitRequest* request, GrpcRateLimitResponse* response) {
   try {
     if (request->domain().empty()) {
 	return {
-		StatusCode::UNKNOWN, "rate limit domain must not be empty"
+		RateLimitStatusCode::UNKNOWN, "rate limit domain must not be empty"
 	};
     }
 
     if (request->descriptors().empty()) {
 	return {
-	    StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"
+	    RateLimitStatusCode::UNKNOWN, "rate limit descriptor list must not be empty"
 	};
     }    
 
@@ -419,7 +418,7 @@ Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request*
       settings = impl_->settings;
     }
     if (!config) {
-	return {StatusCode::UNKNOWN, "no rate limit configuration loaded"};
+	return {RateLimitStatusCode::UNKNOWN, "no rate limit configuration loaded"};
     }
 
     const int count = request->descriptors_size();
@@ -444,7 +443,7 @@ Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request*
 
     const auto statuses = impl_->limit(*request, limits);
     uint32_t min_remaining = std::numeric_limits<uint32_t>::max();
-    const GrpcDescriptorStatus* minimum = nullptr;
+    const GrpcRateLimitDescriptorStatus* minimum = nullptr;
     std::vector<int> passed;
     std::unordered_map<std::string, bool> quota_groups;
     std::vector<std::string> descriptor_groups(count);
@@ -475,7 +474,7 @@ Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request*
     };
     if (settings.per_unit_headers) {
       std::vector<int> units;
-      std::unordered_map<int, const GrpcDescriptorStatus*> closest;
+      std::unordered_map<int, const GrpcRateLimitDescriptorStatus*> closest;
       for (const auto& status : statuses) if (status.has_current_limit()) {
         const int unit = status.current_limit().unit();
         const auto found = closest.find(unit);
@@ -484,7 +483,7 @@ Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request*
       }
       for (int unit : units) {
         const auto* status = closest[unit];
-        std::string suffix = pb::RateLimitResponse_RateLimit_Unit_Name(static_cast<Unit>(unit));
+        std::string suffix = pb::RateLimitResponse_RateLimit_Unit_Name(static_cast<GrpcRateLimitUnit>(unit));
         for (size_t i = 1; i < suffix.size(); ++i) suffix[i] = std::tolower(static_cast<unsigned char>(suffix[i]));
         suffix += "s";
         add_header(response->mutable_response_headers_to_add(), "RateLimit-Limit-"+suffix, std::to_string(status->current_limit().requests_per_unit()));
@@ -512,14 +511,14 @@ Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request*
       *response->mutable_dynamic_metadata() = metadataFor(*request, available, limits, !quota_groups.empty());
     }
     response->set_overall_code(final_code);
-    return {StatusCode::OK, ""};
+    return {RateLimitStatusCode::OK, ""};
   } catch (const std::exception& e) {
     const std::string message = e.what();
     const bool backend_error = message.rfind("backend ", 0) == 0 ||
         message.rfind("response returned from Conn:", 0) == 0;
     impl_->stats.add(backend_error ? "ratelimit.service.call.should_rate_limit.redis_error"
                                    : "ratelimit.service.call.should_rate_limit.service_error");
-    response->Clear(); return {StatusCode::UNKNOWN, e.what()};
+    response->Clear(); return {RateLimitStatusCode::UNKNOWN, e.what()};
   }
 }
 }

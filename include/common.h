@@ -12,18 +12,23 @@ namespace rlc {
 namespace pb = envoy::service::ratelimit::v3;
 namespace common = envoy::extensions::common::ratelimit::v3;
 
-using GrpcStatus = grpc::Status;
-using Status = RateLimitStatus;
+// Shared application types (defined independently of gRPC in types.h).
+using ::RateLimitRequest;
+using ::RateLimitDescriptor;
+using ::RateLimitUnit;
+using ::RateLimitStatus;
+using ::RateLimitStatusCode;
 
-using GrpcStatusCode = grpc::StatusCode;
-using StatusCode = RateLimitStatusCode;
+// gRPC frontend / protobuf types. Response and config migration is still pending.
+using GrpcRateLimitRequest = pb::RateLimitRequest;
+using GrpcRateLimitResponse = pb::RateLimitResponse;
+using GrpcRateLimitDescriptor = common::RateLimitDescriptor;
+using GrpcRateLimitDescriptorStatus = pb::RateLimitResponse::DescriptorStatus;
+using GrpcRateLimitUnit = pb::RateLimitResponse_RateLimit_Unit;
 
-using GrpcRequest = pb::RateLimitRequest;
-using Request = RateLimitRequest;
-
-using Response = pb::RateLimitResponse;
-using Descriptor = common::RateLimitDescriptor;
-using Unit = pb::RateLimitResponse_RateLimit_Unit;
+// RPC operation status, distinct from a descriptor's OK/OVER_LIMIT decision.
+using GrpcRateLimitStatus = grpc::Status;
+using GrpcRateLimitStatusCode = grpc::StatusCode;
 
 inline std::string env(const char* key, const std::string& fallback = "") {
   const char* value = std::getenv(key); return value ? value : fallback;

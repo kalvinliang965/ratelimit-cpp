@@ -270,7 +270,7 @@ struct Node {
         auto unit_string = readString(rate, "unit", file);
         auto unit_upper = unit_string;
         std::transform(unit_upper.begin(), unit_upper.end(), unit_upper.begin(), [](unsigned char c) { return std::toupper(c); });
-        Unit unit = pb::RateLimitResponse_RateLimit_Unit_UNKNOWN;
+        GrpcRateLimitUnit unit = pb::RateLimitResponse_RateLimit_Unit_UNKNOWN;
         const bool valid_unit = pb::RateLimitResponse_RateLimit_Unit_Parse(unit_upper, &unit) && unit != pb::RateLimitResponse_RateLimit_Unit_UNKNOWN;
         if (limit.unlimited && valid_unit) configError(file, "should not specify rate limit unit when unlimited");
         if (!limit.unlimited && !valid_unit) configError(file, "invalid rate limit unit '" + unit_string + "'");
@@ -363,7 +363,7 @@ std::shared_ptr<Config> Config::load(const std::vector<std::pair<std::string, st
   return config;
 }
 
-std::optional<Limit> Config::find(const std::string& domain, const Descriptor& descriptor) const {
+std::optional<Limit> Config::find(const std::string& domain, const GrpcRateLimitDescriptor& descriptor) const {
   const auto domain_entry = impl_->domains.find(domain);
   if (domain_entry == impl_->domains.end()) return std::nullopt;
   if (descriptor.has_limit()) {
@@ -377,7 +377,7 @@ std::optional<Limit> Config::find(const std::string& domain, const Descriptor& d
     }
     result.full_key += entries_key;
     result.limit.set_requests_per_unit(descriptor.limit().requests_per_unit());
-    result.limit.set_unit(static_cast<Unit>(descriptor.limit().unit()));
+    result.limit.set_unit(static_cast<GrpcRateLimitUnit>(descriptor.limit().unit()));
     return result;
   }
   const Node* current = &domain_entry->second;

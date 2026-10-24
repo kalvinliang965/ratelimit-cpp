@@ -6,14 +6,14 @@
 
 namespace rlc::grpc_conversion {
 
-Status FromProto(const GrpcStatus& status);
-GrpcStatus ToProto(const Status& status);
+RateLimitStatus FromProto(const GrpcRateLimitStatus& status);
+GrpcRateLimitStatus ToProto(const RateLimitStatus& status);
 
-RateLimitDescriptor FromProto(const common::RateLimitDescriptor& descriptor);
-common::RateLimitDescriptor ToProto(const RateLimitDescriptor& descriptor);
+RateLimitDescriptor FromProto(const GrpcRateLimitDescriptor& descriptor);
+GrpcRateLimitDescriptor ToProto(const RateLimitDescriptor& descriptor);
 
-Request FromProto(const GrpcRequest& request);
-GrpcRequest ToProto(const Request& request);
+RateLimitRequest FromProto(const GrpcRateLimitRequest& request);
+GrpcRateLimitRequest ToProto(const RateLimitRequest& request);
 
 }
 
