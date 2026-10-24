@@ -18,7 +18,6 @@ struct RateLimitResponse {
     };
 
     struct RateLimit {
-        // The response enum includes WEEK; the request override enum does not.
         enum class Unit : int32_t {
             UNKNOWN = 0,
             SECOND = 1,
@@ -34,7 +33,6 @@ struct RateLimitResponse {
         Unit unit_ = Unit::UNKNOWN;
     };
 
-    // Absolute time since the Unix epoch, unlike Duration's relative interval.
     struct Timestamp {
         int64_t seconds_ = 0;
         int32_t nanos_ = 0;
@@ -48,8 +46,6 @@ struct RateLimitResponse {
     struct Quota {
         uint32_t requests_ = 0;
         std::string id_;
-        // The oneof currently has just one alternative. Absence is distinct
-        // from a present timestamp at the Unix epoch (zero seconds/nanos).
         std::optional<Timestamp> valid_until_;
     };
 
@@ -64,11 +60,9 @@ struct RateLimitResponse {
     struct HeaderValue {
         std::string key_;
         std::string value_;
-        // std::string preserves arbitrary bytes, including embedded nulls.
         std::string raw_value_;
     };
 
-    // A recursive representation of google.protobuf.Value/Struct/ListValue.
     struct Value {
         using Object = std::unordered_map<std::string, Value>;
         using List = std::vector<Value>;
@@ -89,7 +83,6 @@ struct RateLimitResponse {
     std::vector<HeaderValue> response_headers_to_add_;
     std::vector<HeaderValue> request_headers_to_add_;
     std::string raw_body_;
-    // Preserve absent versus present-but-empty metadata.
     std::optional<Value::Object> dynamic_metadata_;
     std::optional<Quota> quota_;
 };

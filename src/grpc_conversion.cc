@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iostream>
 #include <utility>
+#include <type_traits>
 
 namespace rlc::grpc_conversion {
 
@@ -78,7 +79,179 @@ GrpcRateLimitRequest ToProto(const RateLimitRequest& request) {
     return result;
 }
 
-// TODO: Implement response conversions once the shared response type is defined.
+RateLimitResponse::Timestamp FromProto(const google::protobuf::Timestamp& source) {
+    return {source.seconds(), source.nanos()};
+}
+
+google::protobuf::Timestamp ToProto(const RateLimitResponse::Timestamp& source) {
+    google::protobuf::Timestamp result;
+    result.set_seconds(source.seconds_);
+    result.set_nanos(source.nanos_);
+    return result;
+}
+
+RateLimitResponse::Duration FromProto(const google::protobuf::Duration& source) {
+    return {source.seconds(), source.nanos()};
+}
+
+google::protobuf::Duration ToProto(const RateLimitResponse::Duration& source) {
+    google::protobuf::Duration result;
+    result.set_seconds(source.seconds_);
+    result.set_nanos(source.nanos_);
+    return result;
+}
+
+RateLimitResponse::RateLimit FromProto(const GrpcRateLimitResponse::RateLimit& source) {
+    return {source.name(), source.requests_per_unit(),
+            static_cast<RateLimitResponse::RateLimit::Unit>(source.unit())};
+}
+
+GrpcRateLimitResponse::RateLimit ToProto(const RateLimitResponse::RateLimit& source) {
+    GrpcRateLimitResponse::RateLimit result;
+    result.set_name(source.name_);
+    result.set_requests_per_unit(source.requests_per_unit_);
+    result.set_unit(static_cast<GrpcRateLimitUnit>(source.unit_));
+    return result;
+}
+
+RateLimitResponse::Quota FromProto(const GrpcRateLimitResponse::Quota& source) {
+    RateLimitResponse::Quota result;
+    result.requests_ = source.requests();
+    result.id_ = source.id();
+    if (source.has_valid_until()) result.valid_until_ = FromProto(source.valid_until());
+    return result;
+}
+
+GrpcRateLimitResponse::Quota ToProto(const RateLimitResponse::Quota& source) {
+    GrpcRateLimitResponse::Quota result;
+    result.set_requests(source.requests_);
+    result.set_id(source.id_);
+    if (source.valid_until_) *result.mutable_valid_until() = ToProto(*source.valid_until_);
+    return result;
+}
+
+RateLimitResponse::HeaderValue FromProto(const envoy::config::core::v3::HeaderValue& source) {
+    return {source.key(), source.value(), source.raw_value()};
+}
+
+envoy::config::core::v3::HeaderValue ToProto(const RateLimitResponse::HeaderValue& source) {
+    envoy::config::core::v3::HeaderValue result;
+    result.set_key(source.key_);
+    result.set_value(source.value_);
+    result.set_raw_value(source.raw_value_);
+    return result;
+}
+
+RateLimitResponse::DescriptorStatus FromProto(const GrpcRateLimitDescriptorStatus& source) {
+    RateLimitResponse::DescriptorStatus result;
+    result.code_ = static_cast<RateLimitResponse::Code>(source.code());
+    result.limit_remaining_ = source.limit_remaining();
+    if (source.has_current_limit()) result.current_limit_ = FromProto(source.current_limit());
+    if (source.has_duration_until_reset()) result.duration_until_reset_ = FromProto(source.duration_until_reset());
+    if (source.has_quota()) result.quota_ = FromProto(source.quota());
+    return result;
+}
+
+GrpcRateLimitDescriptorStatus ToProto(const RateLimitResponse::DescriptorStatus& source) {
+    GrpcRateLimitDescriptorStatus result;
+    result.set_code(static_cast<GrpcRateLimitResponse::Code>(source.code_));
+    result.set_limit_remaining(source.limit_remaining_);
+    if (source.current_limit_) *result.mutable_current_limit() = ToProto(*source.current_limit_);
+    if (source.duration_until_reset_) *result.mutable_duration_until_reset() = ToProto(*source.duration_until_reset_);
+    if (source.quota_) *result.mutable_quota() = ToProto(*source.quota_);
+    return result;
+}
+
+RateLimitResponse::Value::Object FromProto(const google::protobuf::Struct& source) {
+    RateLimitResponse::Value::Object result;
+    for (const auto& field : source.fields()) {
+        result.emplace(field.first, FromProto(field.second));
+    }
+    return result;
+}
+
+google::protobuf::Struct ToProto(const RateLimitResponse::Value::Object& source) {
+    google::protobuf::Struct result;
+    for (const auto& field : source) {
+        (*result.mutable_fields())[field.first] = ToProto(field.second);
+    }
+    return result;
+}
+
+RateLimitResponse::Value::List FromProto(const google::protobuf::ListValue& source) {
+    RateLimitResponse::Value::List result;
+    result.reserve(source.values_size());
+    for (const auto& value : source.values()) result.push_back(FromProto(value));
+    return result;
+}
+
+google::protobuf::ListValue ToProto(const RateLimitResponse::Value::List& source) {
+    google::protobuf::ListValue result;
+    for (const auto& value : source) *result.add_values() = ToProto(value);
+    return result;
+}
+
+RateLimitResponse::Value FromProto(const google::protobuf::Value& source) {
+    RateLimitResponse::Value result;
+    switch (source.kind_case()) {
+        case google::protobuf::Value::kNullValue: result.data_ = nullptr; break;
+        case google::protobuf::Value::kNumberValue: result.data_ = source.number_value(); break;
+        case google::protobuf::Value::kStringValue: result.data_ = source.string_value(); break;
+        case google::protobuf::Value::kBoolValue: result.data_ = source.bool_value(); break;
+        case google::protobuf::Value::kStructValue: result.data_ = FromProto(source.struct_value()); break;
+        case google::protobuf::Value::kListValue: result.data_ = FromProto(source.list_value()); break;
+        case google::protobuf::Value::KIND_NOT_SET: break;
+    }
+    return result;
+}
+
+google::protobuf::Value ToProto(const RateLimitResponse::Value& source) {
+    google::protobuf::Value result;
+    std::visit([&result](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, std::nullptr_t>) {
+            result.set_null_value(google::protobuf::NULL_VALUE);
+        } else if constexpr (std::is_same_v<T, double>) {
+            result.set_number_value(value);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            result.set_string_value(value);
+        } else if constexpr (std::is_same_v<T, bool>) {
+            result.set_bool_value(value);
+        } else if constexpr (std::is_same_v<T, RateLimitResponse::Value::Object>) {
+            *result.mutable_struct_value() = ToProto(value);
+        } else if constexpr (std::is_same_v<T, RateLimitResponse::Value::List>) {
+            *result.mutable_list_value() = ToProto(value);
+        }
+        // monostate deliberately leaves the protobuf kind unset.
+    }, source.data_);
+    return result;
+}
+
+RateLimitResponse FromProto(const GrpcRateLimitResponse& source) {
+    RateLimitResponse result;
+    result.overall_code_ = static_cast<RateLimitResponse::Code>(source.overall_code());
+    result.statuses_.reserve(source.statuses_size());
+    for (const auto& status : source.statuses()) result.statuses_.push_back(FromProto(status));
+    for (const auto& header : source.response_headers_to_add()) result.response_headers_to_add_.push_back(FromProto(header));
+    for (const auto& header : source.request_headers_to_add()) result.request_headers_to_add_.push_back(FromProto(header));
+    result.raw_body_ = source.raw_body();
+    if (source.has_dynamic_metadata()) result.dynamic_metadata_ = FromProto(source.dynamic_metadata());
+    if (source.has_quota()) result.quota_ = FromProto(source.quota());
+    return result;
+}
+
+GrpcRateLimitResponse ToProto(const RateLimitResponse& source) {
+    GrpcRateLimitResponse result;
+    result.set_overall_code(static_cast<GrpcRateLimitResponse::Code>(source.overall_code_));
+    for (const auto& status : source.statuses_) *result.add_statuses() = ToProto(status);
+    for (const auto& header : source.response_headers_to_add_) *result.add_response_headers_to_add() = ToProto(header);
+    for (const auto& header : source.request_headers_to_add_) *result.add_request_headers_to_add() = ToProto(header);
+    result.set_raw_body(source.raw_body_);
+    if (source.dynamic_metadata_) *result.mutable_dynamic_metadata() = ToProto(*source.dynamic_metadata_);
+    if (source.quota_) *result.mutable_quota() = ToProto(*source.quota_);
+    return result;
+}
+
 
 }  // namespace rlc::grpc_conversion
 

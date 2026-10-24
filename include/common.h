@@ -14,12 +14,13 @@ namespace common = envoy::extensions::common::ratelimit::v3;
 
 // Shared application types (defined independently of gRPC in types.h).
 using ::RateLimitRequest;
+using ::RateLimitResponse;
 using ::RateLimitDescriptor;
 using ::RateLimitUnit;
 using ::RateLimitStatus;
 using ::RateLimitStatusCode;
 
-// gRPC frontend / protobuf types. Response and config migration is still pending.
+// gRPC frontend / protobuf types. Service response and config migration is still pending.
 using GrpcRateLimitRequest = pb::RateLimitRequest;
 using GrpcRateLimitResponse = pb::RateLimitResponse;
 using GrpcRateLimitDescriptor = common::RateLimitDescriptor;
