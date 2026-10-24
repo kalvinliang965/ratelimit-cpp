@@ -65,11 +65,10 @@ class RawGrpcService::Call {
             this);
         return;
       }
-
       Response response;
       auto cpp_request = rlc::grpc_conversion::FromProto(request);
-      const auto status = owner_->implementation_.ShouldRateLimit(
-          &context_, &cpp_request, &response);
+      Status cpp_status = owner_->implementation_.ShouldRateLimit(&context_, &cpp_request, &response);
+      const auto status = rlc::grpc_conversion::ToProto(cpp_status);
       if (!status.ok()) {
         responder_.FinishWithError(status, this);
         return;

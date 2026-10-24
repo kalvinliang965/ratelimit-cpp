@@ -2,6 +2,8 @@
 #include "config.h"
 #include "envoy/service/ratelimit/v3/rls.grpc.pb.h"
 #include <mutex>
+#include "common.h"
+
 namespace rlc {
 
 class Service {
@@ -13,7 +15,7 @@ class Service {
   bool backendHealthy() const;
   void recordConfigLoad(bool success);
   std::string statsDump() const;
-  grpc::Status ShouldRateLimit(grpc::ServerContext*, const Request*, Response*);
+  Status ShouldRateLimit(grpc::ServerContext*, const Request*, Response*);
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

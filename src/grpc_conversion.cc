@@ -7,6 +7,18 @@
 
 namespace rlc::grpc_conversion {
 
+
+Status FromProto(const GrpcStatus& status) {
+	return Status(static_cast<StatusCode>(status.error_code()), status.error_message());
+}
+
+GrpcStatus ToProto(const Status& status) { 
+	return GrpcStatus(
+		static_cast<grpc::StatusCode>(status.code()),
+		status.message()
+	    );
+}
+
 RateLimitDescriptor FromProto(const common::RateLimitDescriptor& source) {
     RateLimitDescriptor result;
     result.entries_.reserve(source.entries_size());

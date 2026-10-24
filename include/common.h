@@ -6,14 +6,20 @@
 #include <algorithm>
 #include "envoy/service/ratelimit/v3/rls.pb.h"
 #include "types.h"
+#include <grpcpp/grpcpp.h>
 
 namespace rlc {
 namespace pb = envoy::service::ratelimit::v3;
 namespace common = envoy::extensions::common::ratelimit::v3;
 
+using GrpcStatus = grpc::Status;
+using Status = RateLimitStatus;
+
+using GrpcStatusCode = grpc::StatusCode;
+using StatusCode = RateLimitStatusCode;
+
 using GrpcRequest = pb::RateLimitRequest;
 using Request = RateLimitRequest;
-
 
 using Response = pb::RateLimitResponse;
 using Descriptor = common::RateLimitDescriptor;

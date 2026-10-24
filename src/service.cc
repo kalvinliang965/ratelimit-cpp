@@ -10,13 +10,15 @@
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
+#include "common.h"
 
 namespace rlc {
 namespace {
 
-using Status = pb::RateLimitResponse_DescriptorStatus;
+using GrpcDescriptorStatus = pb::RateLimitResponse_DescriptorStatus;
 using Struct = google::protobuf::Struct;
 using Value = google::protobuf::Value;
+
 constexpr auto OK = pb::RateLimitResponse::OK;
 constexpr auto OVER = pb::RateLimitResponse::OVER_LIMIT;
 
@@ -176,25 +178,37 @@ struct Service::Impl {
   void rateMetric(const Limit& limit, const char* suffix, uint64_t value) {
     stats.add("ratelimit.service.rate_limit." + sanitizeStatsName(limit.full_key) + "." + suffix, value);
   }
+
   Impl() {
     const auto backend = env("BACKEND_TYPE", "redis");
     if (backend == "redis") {
-      if (envBool("REDIS_PERSECOND")) per_second = std::make_unique<Redis>(true);
+      if (envBool("REDIS_PERSECOND")) {
+	per_second = std::make_unique<Redis>(true);
+      }
       redis = std::make_unique<Redis>();
-    } else if (backend == "memcache") memcache = std::make_unique<Memcache>();
-    else throw std::runtime_error("unknown backend type: " + backend);
+    } else if (backend == "memcache") {
+	memcache = std::make_unique<Memcache>();
+    } else {
+	throw std::runtime_error("unknown backend type: " + backend);
+    }
   }
+
   bool cached(const std::string& key) {
     if (!cache_budget) return false;
     std::lock_guard<std::mutex> lock(cache_mutex);
     const auto found = local.find(key);
-    if (found == local.end()) return false;
+    if (found == local.end()) {
+	return false;
+    }
     if (found->second.expires <= nowSeconds()) {
-      cache_bytes -= found->second.size; lru.erase(found->second.position); local.erase(found); return false;
+      cache_bytes -= found->second.size; 
+      lru.erase(found->second.position); 
+      local.erase(found); return false;
     }
     lru.splice(lru.begin(), lru, found->second.position);
     return true;
   }
+
   void cache(const std::string& key, Unit unit) {
     if (!cache_budget) return;
     const size_t size = key.size()+24;
@@ -223,23 +237,38 @@ struct Service::Impl {
     }
     return value;
   }
-  std::vector<Status> limit(const Request& request, const std::vector<std::optional<Limit>>& limits) {
+  std::vector<GrpcDescriptorStatus> limit(const Request& request, const std::vector<std::optional<Limit>>& limits) {
     const size_t count = limits.size();
+
     std::vector<std::string> keys(count);
     std::vector<uint64_t> hits(count), results(count), current(count), applied(count);
     std::vector<bool> negative(count), local_over(count), near(count);
+
     bool any_over = false, any_near = false;
+
     const auto now = nowSeconds();
+
     for (size_t i = 0; i < count; ++i) {
       const auto& descriptor = request.descriptors(i);
       hits[i] = descriptor.has_hits_addend() ? descriptor.hits_addend().value() : std::max<uint64_t>(1, request.hits_addend());
       negative[i] = descriptor.is_negative_hits();
-      if (!limits[i]) continue;
+
+      if (!limits[i]) {
+	continue;
+      }
+
       keys[i] = keyFor(request, i, *limits[i], now, prefix, calendar);
-      if (negative[i]) rateMetric(*limits[i], "total_negative_hits", hits[i]);
-      else rateMetric(*limits[i], "total_hits", hits[i]);
-      if (!negative[i] && cached(keys[i])) { local_over[i] = true; any_over = true; }
+
+      if (negative[i]) {
+	rateMetric(*limits[i], "total_negative_hits", hits[i]);
+      } else {
+	rateMetric(*limits[i], "total_hits", hits[i]);
+      }      
+      if (!negative[i] && cached(keys[i])) { 
+	local_over[i] = true; any_over = true; 
+      }
     }
+
     if (redis) {
       std::vector<RedisCommand> main_commands, second_commands;
       auto pipeline = [&](size_t i) -> std::vector<RedisCommand>& {
@@ -282,10 +311,13 @@ struct Service::Impl {
         results[i] = negative[i] ? (before > hits[i] ? before-hits[i] : 0) : before+hits[i];
       }
     }
-    std::vector<Status> statuses(count);
+    std::vector<GrpcDescriptorStatus> statuses(count);
+
     std::vector<MemcacheUpdate> updates;
     for (size_t i = 0; i < count; ++i) {
-      auto& status = statuses[i]; status.set_code(OK);
+      auto& status = statuses[i]; 
+      status.set_code(OK);
+
       if (keys[i].empty()) continue;
       const auto& limit = *limits[i];
       *status.mutable_current_limit() = limit.limit;
@@ -329,9 +361,15 @@ struct Service::Impl {
           }
         }
       }
-      if (memcache && !local_over[i]) updates.push_back({keys[i], hits[i], ttl(limit.limit.unit()), negative[i]});
+
+      if (memcache && !local_over[i]) {
+	updates.push_back({keys[i], hits[i], ttl(limit.limit.unit()), negative[i]});
+      }
     }
-    if (memcache) memcache->update(std::move(updates));
+
+    if (memcache) {
+	memcache->update(std::move(updates));
+    }
     return statuses;
   }
 };
@@ -359,17 +397,17 @@ std::string Service::statsDump() const { return impl_->stats.dump(); }
 
 
 
-grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request* request, Response* response) {
+Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request* request, Response* response) {
   try {
     if (request->domain().empty()) {
 	return {
-		grpc::StatusCode::UNKNOWN, "rate limit domain must not be empty"
+		StatusCode::UNKNOWN, "rate limit domain must not be empty"
 	};
     }
 
     if (request->descriptors().empty()) {
 	return {
-	    grpc::StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"
+	    StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"
 	};
     }    
 
@@ -380,7 +418,9 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
       config = impl_->config; 
       settings = impl_->settings;
     }
-    if (!config) return {grpc::StatusCode::UNKNOWN, "no rate limit configuration loaded"};
+    if (!config) {
+	return {StatusCode::UNKNOWN, "no rate limit configuration loaded"};
+    }
 
     const int count = request->descriptors_size();
 
@@ -404,7 +444,7 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
 
     const auto statuses = impl_->limit(*request, limits);
     uint32_t min_remaining = std::numeric_limits<uint32_t>::max();
-    const Status* minimum = nullptr;
+    const GrpcDescriptorStatus* minimum = nullptr;
     std::vector<int> passed;
     std::unordered_map<std::string, bool> quota_groups;
     std::vector<std::string> descriptor_groups(count);
@@ -435,7 +475,7 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
     };
     if (settings.per_unit_headers) {
       std::vector<int> units;
-      std::unordered_map<int, const Status*> closest;
+      std::unordered_map<int, const GrpcDescriptorStatus*> closest;
       for (const auto& status : statuses) if (status.has_current_limit()) {
         const int unit = status.current_limit().unit();
         const auto found = closest.find(unit);
@@ -472,14 +512,14 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
       *response->mutable_dynamic_metadata() = metadataFor(*request, available, limits, !quota_groups.empty());
     }
     response->set_overall_code(final_code);
-    return grpc::Status::OK;
+    return {StatusCode::OK, ""};
   } catch (const std::exception& e) {
     const std::string message = e.what();
     const bool backend_error = message.rfind("backend ", 0) == 0 ||
         message.rfind("response returned from Conn:", 0) == 0;
     impl_->stats.add(backend_error ? "ratelimit.service.call.should_rate_limit.redis_error"
                                    : "ratelimit.service.call.should_rate_limit.service_error");
-    response->Clear(); return {grpc::StatusCode::UNKNOWN, e.what()};
+    response->Clear(); return {StatusCode::UNKNOWN, e.what()};
   }
 }
 }

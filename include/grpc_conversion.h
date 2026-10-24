@@ -6,6 +6,9 @@
 
 namespace rlc::grpc_conversion {
 
+Status FromProto(const GrpcStatus& status);
+GrpcStatus ToProto(const Status& status);
+
 RateLimitDescriptor FromProto(const common::RateLimitDescriptor& descriptor);
 common::RateLimitDescriptor ToProto(const RateLimitDescriptor& descriptor);
 

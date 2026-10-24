@@ -16,6 +16,40 @@ enum class RateLimitUnit : int32_t {
     YEAR = 6,
 };
 
+
+enum class RateLimitStatusCode : int32_t {
+    OK = 0,
+    CANCELLED = 1,
+    UNKNOWN = 2,
+    INVALID_ARGUMENT = 3,
+    DEADLINE_EXCEEDED = 4,
+    NOT_FOUND = 5,
+    ALREADY_EXISTS = 6,
+    PERMISSION_DENIED = 7,
+    RESOURCE_EXHAUSTED = 8,
+    FAILED_PRECONDITION = 9,
+    ABORTED = 10,
+    OUT_OF_RANGE = 11,
+    UNIMPLEMENTED = 12,
+    INTERNAL = 13,
+    UNAVAILABLE = 14,
+    DATA_LOSS = 15,
+    UNAUTHENTICATED = 16
+};
+
+struct RateLimitStatus {
+	RateLimitStatusCode code_;
+	std::string message_;
+	const RateLimitStatusCode code() const {
+		return code_;
+	}
+	const std::string& message() const {
+		return message_;
+	}
+ 	RateLimitStatus(RateLimitStatusCode code, std::string message)
+        : code_(code), message_(std::move(message)) {}
+};
+
 struct RateLimitDescriptor {
     struct Entry {
         std::string key_;
