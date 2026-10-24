@@ -5,6 +5,94 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <cstddef>
+#include <variant>
+#include <unordered_map>
+
+
+struct RateLimitResponse {
+    enum class Code : int32_t {
+        UNKNOWN = 0,
+        OK = 1,
+        OVER_LIMIT = 2,
+    };
+
+    struct RateLimit {
+        // The response enum includes WEEK; the request override enum does not.
+        enum class Unit : int32_t {
+            UNKNOWN = 0,
+            SECOND = 1,
+            MINUTE = 2,
+            HOUR = 3,
+            DAY = 4,
+            MONTH = 5,
+            YEAR = 6,
+            WEEK = 7,
+        };
+        std::string name_;
+        uint32_t requests_per_unit_ = 0;
+        Unit unit_ = Unit::UNKNOWN;
+    };
+
+    // Absolute time since the Unix epoch, unlike Duration's relative interval.
+    struct Timestamp {
+        int64_t seconds_ = 0;
+        int32_t nanos_ = 0;
+    };
+
+    struct Duration {
+        int64_t seconds_ = 0;
+        int32_t nanos_ = 0;
+    };
+
+    struct Quota {
+        uint32_t requests_ = 0;
+        std::string id_;
+        // The oneof currently has just one alternative. Absence is distinct
+        // from a present timestamp at the Unix epoch (zero seconds/nanos).
+        std::optional<Timestamp> valid_until_;
+    };
+
+    struct DescriptorStatus {
+        Code code_ = Code::UNKNOWN;
+        std::optional<RateLimit> current_limit_;
+        uint32_t limit_remaining_ = 0;
+        std::optional<Duration> duration_until_reset_;
+        std::optional<Quota> quota_;
+    };
+
+    struct HeaderValue {
+        std::string key_;
+        std::string value_;
+        // std::string preserves arbitrary bytes, including embedded nulls.
+        std::string raw_value_;
+    };
+
+    // A recursive representation of google.protobuf.Value/Struct/ListValue.
+    struct Value {
+        using Object = std::unordered_map<std::string, Value>;
+        using List = std::vector<Value>;
+        using Storage = std::variant<
+            std::monostate,  // Protobuf Value with no kind selected.
+            std::nullptr_t,  // Explicit null, distinct from an unset kind.
+            double,
+            std::string,
+            bool,
+            Object,
+            List
+        >;
+        Storage data_ = std::monostate{};
+    };
+
+    Code overall_code_ = Code::UNKNOWN;
+    std::vector<DescriptorStatus> statuses_;
+    std::vector<HeaderValue> response_headers_to_add_;
+    std::vector<HeaderValue> request_headers_to_add_;
+    std::string raw_body_;
+    // Preserve absent versus present-but-empty metadata.
+    std::optional<Value::Object> dynamic_metadata_;
+    std::optional<Quota> quota_;
+};
 
 // Numeric values match the descriptor override's protobuf RateLimitUnit.
 enum class RateLimitUnit : int32_t {
@@ -16,7 +104,6 @@ enum class RateLimitUnit : int32_t {
     MONTH = 5,
     YEAR = 6,
 };
-
 
 enum class RateLimitStatusCode : int32_t {
     OK = 0,
