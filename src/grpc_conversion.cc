@@ -1,5 +1,5 @@
 #include "types.h"
-#include "common.h"
+#include "grpc_conversion.h"
 
 #include <cassert>
 #include <iostream>
@@ -7,59 +7,61 @@
 
 namespace rlc::grpc_conversion {
 
-using GrpcRequest = pb::RateLimitRequest;
+RateLimitDescriptor FromProto(const common::RateLimitDescriptor& source) {
+    RateLimitDescriptor result;
+    result.entries_.reserve(source.entries_size());
+    for (const auto& entry : source.entries()) {
+        result.entries_.push_back({entry.key(), entry.value()});
+    }
+    if (source.has_limit()) {
+        result.limit_ = RateLimitDescriptor::Override{
+            source.limit().requests_per_unit(),
+            static_cast<RateLimitUnit>(source.limit().unit())
+        };
+    }
+    if (source.has_hits_addend()) {
+        result.hits_addend_ = source.hits_addend().value();
+    }
+    result.is_negative_hits_ = source.is_negative_hits();
+    return result;
+}
 
-RateLimitRequest FromProto(const GrpcRequest& request) {
-    RateLimitRequest result;
-    result.domain = request.domain();
-    result.hits_addend = request.hits_addend();
-    result.descriptors.reserve(request.descriptors_size());
+common::RateLimitDescriptor ToProto(const RateLimitDescriptor& source) {
+    common::RateLimitDescriptor result;
+    for (const auto& entry : source.entries()) {
+        auto* output = result.add_entries();
+        output->set_key(entry.key());
+        output->set_value(entry.value());
+    }
+    if (source.has_limit()) {
+        auto* limit = result.mutable_limit();
+        limit->set_requests_per_unit(source.limit().requests_per_unit());
+        limit->set_unit(static_cast<envoy::type::v3::RateLimitUnit>(source.limit().unit()));
+    }
+    if (source.has_hits_addend()) {
+        result.mutable_hits_addend()->set_value(source.hits_addend().value());
+    }
+    result.set_is_negative_hits(source.is_negative_hits());
+    return result;
+}
 
-    for (const auto& grpc_descriptor : request.descriptors()) {
-        RateLimitDescriptor descriptor;
-        descriptor.entries.reserve(grpc_descriptor.entries_size());
-        for (const auto& grpc_entry : grpc_descriptor.entries()) {
-            descriptor.entries.push_back({grpc_entry.key(), grpc_entry.value()});
-        }
-
-        if (grpc_descriptor.has_limit()) {
-            const auto& grpc_limit = grpc_descriptor.limit();
-            descriptor.limit = RateLimitDescriptor::Override{
-                grpc_limit.requests_per_unit(),
-                static_cast<RateLimitUnit>(grpc_limit.unit())
-            };
-        }
-        if (grpc_descriptor.has_hits_addend()) {
-            descriptor.hits_addend = grpc_descriptor.hits_addend().value();
-        }
-        descriptor.is_negative_hits = grpc_descriptor.is_negative_hits();
-        result.descriptors.push_back(std::move(descriptor));
+Request FromProto(const GrpcRequest& request) {
+    Request result;
+    result.domain_ = request.domain();
+    result.hits_addend_ = request.hits_addend();
+    result.descriptors_.reserve(request.descriptors_size());
+    for (const auto& descriptor : request.descriptors()) {
+        result.descriptors_.push_back(FromProto(descriptor));
     }
     return result;
 }
 
-GrpcRequest ToProto(const RateLimitRequest& request) {
+GrpcRequest ToProto(const Request& request) {
     GrpcRequest result;
-    result.set_domain(request.domain);
-    result.set_hits_addend(request.hits_addend);
-
-    for (const auto& descriptor : request.descriptors) {
-        auto* grpc_descriptor = result.add_descriptors();
-        for (const auto& entry : descriptor.entries) {
-            auto* grpc_entry = grpc_descriptor->add_entries();
-            grpc_entry->set_key(entry.key);
-            grpc_entry->set_value(entry.value);
-        }
-        if (descriptor.limit.has_value()) {
-            auto* grpc_limit = grpc_descriptor->mutable_limit();
-            grpc_limit->set_requests_per_unit(descriptor.limit->requests_per_unit);
-            grpc_limit->set_unit(
-                static_cast<envoy::type::v3::RateLimitUnit>(descriptor.limit->unit));
-        }
-        if (descriptor.hits_addend.has_value()) {
-            grpc_descriptor->mutable_hits_addend()->set_value(*descriptor.hits_addend);
-        }
-        grpc_descriptor->set_is_negative_hits(descriptor.is_negative_hits);
+    result.set_domain(request.domain());
+    result.set_hits_addend(request.hits_addend());
+    for (const auto& descriptor : request.descriptors()) {
+        *result.add_descriptors() = ToProto(descriptor);
     }
     return result;
 }
@@ -69,9 +71,64 @@ GrpcRequest ToProto(const RateLimitRequest& request) {
 }  // namespace rlc::grpc_conversion
 
 // Standalone exercise: compile this file separately from src/main.cc.
-int main() {
+#ifdef RATELIMIT_CONVERSION_TEST
+void TestDescriptorConversions() {
     using rlc::grpc_conversion::FromProto;
-    using rlc::grpc_conversion::GrpcRequest;
+    using rlc::grpc_conversion::ToProto;
+
+    const auto empty = FromProto(rlc::common::RateLimitDescriptor{});
+    assert(empty.entries().empty());
+    assert(!empty.has_limit() && !empty.has_hits_addend());
+    assert(!empty.is_negative_hits());
+    assert(ToProto(empty).SerializeAsString().empty());
+
+    // Test independently of request conversion, including every declared unit
+    // and an unknown proto3 enum value that must survive conversion unchanged.
+    for (int unit : {0, 1, 2, 3, 4, 5, 6, 99}) {
+        RateLimitDescriptor native;
+        native.entries_ = {{"message_type", "marketing"}, {"to_number", "12345"}};
+        native.limit_ = RateLimitDescriptor::Override{5, static_cast<RateLimitUnit>(unit)};
+        native.hits_addend_ = uint64_t{1} << 40;
+        native.is_negative_hits_ = true;
+        const auto proto = ToProto(native);
+        assert(proto.entries_size() == 2);
+        assert(proto.entries(0).key() == "message_type");
+        assert(proto.entries(0).value() == "marketing");
+        assert(proto.entries(1).key() == "to_number");
+        assert(proto.entries(1).value() == "12345");
+        assert(proto.has_limit() && proto.limit().requests_per_unit() == 5);
+        assert(static_cast<int>(proto.limit().unit()) == unit);
+        assert(proto.has_hits_addend() && proto.hits_addend().value() == (uint64_t{1} << 40));
+        assert(proto.is_negative_hits());
+
+        const auto restored = FromProto(proto);
+        assert(restored.entries_size() == 2);
+        assert(restored.entries(0).key() == "message_type");
+        assert(restored.entries(0).value() == "marketing");
+        assert(restored.entries(1).key() == "to_number");
+        assert(restored.entries(1).value() == "12345");
+        assert(restored.has_limit() && restored.limit().requests_per_unit() == 5);
+        assert(static_cast<int>(restored.limit().unit()) == unit);
+        assert(restored.has_hits_addend() && restored.hits_addend().value() == (uint64_t{1} << 40));
+        assert(restored.is_negative_hits());
+    }
+
+    rlc::common::RateLimitDescriptor present_zero;
+    present_zero.mutable_limit();
+    present_zero.mutable_hits_addend()->set_value(0);
+    const auto native_zero = FromProto(present_zero);
+    assert(native_zero.has_limit() && native_zero.limit().requests_per_unit() == 0);
+    assert(native_zero.has_hits_addend() && native_zero.hits_addend().value() == 0);
+    const auto proto_zero = ToProto(native_zero);
+    assert(proto_zero.has_limit() && proto_zero.has_hits_addend());
+    assert(proto_zero.SerializeAsString() == present_zero.SerializeAsString());
+    std::cout << "Descriptor conversion tests passed\n";
+}
+
+int main() {
+    TestDescriptorConversions();
+    using rlc::grpc_conversion::FromProto;
+    using rlc::GrpcRequest;
     using rlc::grpc_conversion::ToProto;
 
     GrpcRequest request;
@@ -97,31 +154,31 @@ int main() {
     entry->set_value("alice");
 
     const auto converted = FromProto(request);
-    assert(converted.domain == "messaging");
-    assert(converted.hits_addend == 3);
-    assert(converted.descriptors.size() == 2);
-    const auto& a = converted.descriptors[0];
-    assert(a.entries.size() == 2);
-    assert(a.entries[0].key == "message_type");
-    assert(a.entries[0].value == "marketing");
-    assert(a.entries[1].key == "to_number");
-    assert(a.entries[1].value == "12345");
-    assert(a.limit.has_value());
-    assert(a.limit->requests_per_unit == 5);
-    assert(a.limit->unit == RateLimitUnit::DAY);
-    assert(a.hits_addend.has_value() && *a.hits_addend == 0);
-    assert(a.is_negative_hits);
-    const auto& b = converted.descriptors[1];
-    assert(b.entries.size() == 1);
-    assert(b.entries[0].key == "user" && b.entries[0].value == "alice");
-    assert(!b.limit.has_value());
-    assert(!b.hits_addend.has_value());
-    assert(!b.is_negative_hits);
+    assert(converted.domain_ == "messaging");
+    assert(converted.hits_addend_ == 3);
+    assert(converted.descriptors_.size() == 2);
+    const auto& a = converted.descriptors_[0];
+    assert(a.entries_.size() == 2);
+    assert(a.entries_[0].key_ == "message_type");
+    assert(a.entries_[0].value_ == "marketing");
+    assert(a.entries_[1].key_ == "to_number");
+    assert(a.entries_[1].value_ == "12345");
+    assert(a.limit_.has_value());
+    assert(a.limit_->requests_per_unit_ == 5);
+    assert(a.limit_->unit_ == RateLimitUnit::DAY);
+    assert(a.hits_addend_.has_value() && *a.hits_addend_ == 0);
+    assert(a.is_negative_hits_);
+    const auto& b = converted.descriptors_[1];
+    assert(b.entries_.size() == 1);
+    assert(b.entries_[0].key_ == "user" && b.entries_[0].value_ == "alice");
+    assert(!b.limit_.has_value());
+    assert(!b.hits_addend_.has_value());
+    assert(!b.is_negative_hits_);
 
     const auto empty = FromProto(GrpcRequest{});
-    assert(empty.domain.empty());
-    assert(empty.descriptors.empty());
-    assert(empty.hits_addend == 0);
+    assert(empty.domain_.empty());
+    assert(empty.descriptors_.empty());
+    assert(empty.hits_addend_ == 0);
 
     const auto round_trip = ToProto(converted);
     assert(round_trip.SerializeAsString() == request.SerializeAsString());
@@ -135,13 +192,13 @@ int main() {
     // Build a native request directly, including an explicitly present default
     // override and a count that would be truncated if converted through uint32.
     RateLimitRequest native;
-    native.domain = "native";
-    native.hits_addend = 2;
+    native.domain_ = "native";
+    native.hits_addend_ = 2;
     RateLimitDescriptor descriptor;
-    descriptor.entries.push_back({"user", "bob"});
-    descriptor.limit = RateLimitDescriptor::Override{};
-    descriptor.hits_addend = uint64_t{1} << 40;
-    native.descriptors.push_back(descriptor);
+    descriptor.entries_.push_back({"user", "bob"});
+    descriptor.limit_ = RateLimitDescriptor::Override{};
+    descriptor.hits_addend_ = uint64_t{1} << 40;
+    native.descriptors_.push_back(descriptor);
     const auto proto = ToProto(native);
     assert(proto.domain() == "native" && proto.hits_addend() == 2);
     assert(proto.descriptors_size() == 1);
@@ -156,6 +213,23 @@ int main() {
     assert(output.hits_addend().value() == (uint64_t{1} << 40));
     assert(!output.is_negative_hits());
 
+    assert(converted.domain() == "messaging");
+    assert(converted.hits_addend() == 3);
+    assert(converted.descriptors_size() == 2);
+    assert(&converted.descriptors() == &converted.descriptors_);
+    const auto& accessed = converted.descriptors(0);
+    assert(accessed.entries_size() == 2);
+    assert(accessed.entries(0).key() == "message_type");
+    assert(accessed.entries(0).value() == "marketing");
+    assert(accessed.has_limit() && accessed.limit().requests_per_unit() == 5);
+    assert(accessed.limit().unit() == RateLimitUnit::DAY);
+    assert(accessed.has_hits_addend() && accessed.hits_addend().value() == 0);
+    assert(accessed.is_negative_hits());
+    assert(!converted.descriptors(1).has_limit());
+    assert(converted.descriptors(1).limit().requests_per_unit() == 0);
+    assert(!converted.descriptors(1).has_hits_addend());
+
     std::cout << "FromProto and ToProto request tests passed\n";
     return 0;
 }
+#endif

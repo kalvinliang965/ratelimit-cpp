@@ -346,16 +346,25 @@ void resolveOptions(Options& opts) {
 
 void run_grpc_client(Options& opts) {
 	assert(!opts.client.empty());
-	Request req; Response res;
+
+	GrpcRequest req; 
+	Response res;
+
 	auto parsed=google::protobuf::util::JsonStringToMessage(opts.request,&req);
-	if(!parsed.ok()) throw std::runtime_error(parsed.ToString());
-	auto stub=pb::RateLimitService::NewStub(grpc::CreateChannel(opts.client,grpc::InsecureChannelCredentials()));
+	if(!parsed.ok()) {
+		throw std::runtime_error(parsed.ToString());
+	}
+
+	auto stub = pb::RateLimitService::NewStub(grpc::CreateChannel(opts.client,grpc::InsecureChannelCredentials()));
 	grpc::ClientContext context;
 	context.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(10));
-	auto status=stub->ShouldRateLimit(&context,req,&res);
+
+	auto status=stub->ShouldRateLimit(&context, req, &res);
 	if(!status.ok()) throw std::runtime_error(status.error_message());
+
 	std::string json; google::protobuf::util::MessageToJsonString(res,&json);
 	std::cout<<json<<'\n';
+
 	return;
 }
 
@@ -386,6 +395,7 @@ void run_grpc_server(
 	builder.AddChannelArgument(GRPC_ARG_MAX_CONNECTION_AGE_MS,static_cast<int>(durationMillis(env("GRPC_MAX_CONNECTION_AGE","24h"))));
 	builder.AddChannelArgument(GRPC_ARG_MAX_CONNECTION_AGE_GRACE_MS,static_cast<int>(durationMillis(env("GRPC_MAX_CONNECTION_AGE_GRACE","1h"))));
 	builder.SetMaxReceiveMessageSize(4*1024*1024);
+
 	RawGrpcService grpc_service(service);
 	HealthService health_service;
 	health_service.setServing(healthy());
@@ -395,7 +405,8 @@ void run_grpc_server(
 	} else {
 		builder.AddListeningPort(listen,credentials());
 	}
-	builder.RegisterService(&grpc_service); builder.RegisterService(&health_service);
+	builder.RegisterService(&grpc_service); 
+	builder.RegisterService(&health_service);
 
 	auto server = builder.BuildAndStart();
 	if(!server) {

@@ -5,12 +5,16 @@
 #include <stdexcept>
 #include <algorithm>
 #include "envoy/service/ratelimit/v3/rls.pb.h"
+#include "types.h"
 
 namespace rlc {
 namespace pb = envoy::service::ratelimit::v3;
 namespace common = envoy::extensions::common::ratelimit::v3;
 
-using Request = pb::RateLimitRequest;
+using GrpcRequest = pb::RateLimitRequest;
+using Request = RateLimitRequest;
+
+
 using Response = pb::RateLimitResponse;
 using Descriptor = common::RateLimitDescriptor;
 using Unit = pb::RateLimitResponse_RateLimit_Unit;

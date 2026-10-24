@@ -17,7 +17,7 @@ class RawGrpcService final
     : public pb::RateLimitService::WithRawMethod_ShouldRateLimit<
           pb::RateLimitService::Service> {
  public:
-  explicit RawGrpcService(Service& implementation);
+  explicit RawGrpcService(rlc::Service& implementation);
   ~RawGrpcService() override;
 
   RawGrpcService(const RawGrpcService&) = delete;
@@ -31,7 +31,7 @@ class RawGrpcService final
  private:
   class Call;
 
-  Service& implementation_;
+  rlc::Service& implementation_;
   grpc::ServerCompletionQueue* completion_queue_ = nullptr;
   std::vector<std::thread> workers_;
 };

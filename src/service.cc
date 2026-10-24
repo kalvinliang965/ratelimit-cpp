@@ -1,4 +1,5 @@
 #include "service.h"
+#include "grpc_conversion.h"
 #include "backend.h"
 #include "stats.h"
 #include <chrono>
@@ -12,6 +13,7 @@
 
 namespace rlc {
 namespace {
+
 using Status = pb::RateLimitResponse_DescriptorStatus;
 using Struct = google::protobuf::Struct;
 using Value = google::protobuf::Value;
@@ -102,7 +104,7 @@ Struct metadataFor(const Request& request, const std::vector<int>& passed,
     auto& item = *descriptors->add_values()->mutable_struct_value()->mutable_fields();
     auto* entries = item["entries"].mutable_list_value();
     for (const auto& entry : descriptor.entries()) entries->add_values()->set_string_value(entry.key()+"="+entry.value());
-    if (descriptor.has_limit()) item["limit"].set_string_value(overrideString(descriptor));
+    if (descriptor.has_limit()) item["limit"].set_string_value(overrideString(grpc_conversion::ToProto(descriptor)));
     if (descriptor.has_hits_addend()) item["hitsAddend"].set_number_value(static_cast<double>(descriptor.hits_addend().value()));
   }
   if (request.hits_addend()) fields["hitsAddend"].set_number_value(request.hits_addend());
@@ -113,7 +115,7 @@ Struct metadataFor(const Request& request, const std::vector<int>& passed,
     std::unordered_set<std::string> seen;
     for (int index : passed) {
       const auto& descriptor = request.descriptors(index);
-      const auto key = groupKey(descriptor);
+      const auto key = groupKey(grpc_conversion::ToProto(descriptor));
       if (seen.count(key)) continue;
       std::string backend, model;
       for (const auto& entry : descriptor.entries()) {
@@ -339,11 +341,14 @@ Service::~Service() = default;
 void Service::setConfig(std::shared_ptr<Config> config) {
   ResponseSettings settings;
   std::lock_guard<std::mutex> lock(impl_->config_mutex);
-  impl_->config = std::move(config); impl_->settings = std::move(settings);
+  impl_->config = std::move(config); 
+  impl_->settings = std::move(settings);
 }
 std::shared_ptr<Config> Service::getConfig() const {
-  std::lock_guard<std::mutex> lock(impl_->config_mutex); return impl_->config;
+  std::lock_guard<std::mutex> lock(impl_->config_mutex); 
+  return impl_->config;
 }
+
 bool Service::backendHealthy() const {
   return (!impl_->redis || impl_->redis->healthy()) && (!impl_->per_second || impl_->per_second->healthy());
 }
@@ -356,10 +361,19 @@ std::string Service::statsDump() const { return impl_->stats.dump(); }
 
 grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Request* request, Response* response) {
   try {
-    if (request->domain().empty()) return {grpc::StatusCode::UNKNOWN, "rate limit domain must not be empty"};
-    if (request->descriptors().empty()) return {grpc::StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"};
-    std::shared_ptr<Config> config;
+    if (request->domain().empty()) {
+	return {
+		grpc::StatusCode::UNKNOWN, "rate limit domain must not be empty"
+	};
+    }
 
+    if (request->descriptors().empty()) {
+	return {
+	    grpc::StatusCode::UNKNOWN, "rate limit descriptor list must not be empty"
+	};
+    }    
+
+    std::shared_ptr<Config> config;
     ResponseSettings settings;
     {
       std::lock_guard<std::mutex> lock(impl_->config_mutex);
@@ -370,13 +384,12 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
 
     const int count = request->descriptors_size();
 
-    //  go code
     std::vector<std::optional<Limit>> limits(count);
     std::vector<bool> unlimited(count);
     std::unordered_set<std::string> replaces;
 
     for (int i = 0; i < count; ++i) {
-      limits[i] = config->find(request->domain(), request->descriptors(i));
+      limits[i] = config->find(request->domain(), grpc_conversion::ToProto(request->descriptors(i)));
       if (limits[i]) {
         for (const auto& name : limits[i]->replaces) replaces.insert(name);
         if (limits[i]->unlimited) { unlimited[i] = true; limits[i].reset(); }
@@ -409,7 +422,7 @@ grpc::Status Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const Re
       const bool over = status.code() == OVER;
       if (!over) passed.push_back(i);
       if (is_quota) {
-        const auto key = groupKey(request->descriptors(i));
+        const auto key = groupKey(grpc_conversion::ToProto(request->descriptors(i)));
         descriptor_groups[i] = key;
         quota_groups[key] = quota_groups[key] || over;
       } else if (over) { ordinary_over = true; minimum = &status; min_remaining = 0; }

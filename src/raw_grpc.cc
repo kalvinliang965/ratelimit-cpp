@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "grpc_conversion.h"
+
 namespace rlc {
 namespace {
 
@@ -16,7 +18,7 @@ constexpr char kMalformedRequestError[] =
     "grpc: error unmarshalling request: proto:" "\xC2\xA0"
     "cannot parse invalid wire-format data";
 
-bool decode(const grpc::ByteBuffer& buffer, Request* request) {
+bool decode(const grpc::ByteBuffer& buffer, GrpcRequest* request) {
   std::vector<grpc::Slice> slices;
   if (!buffer.Dump(&slices).ok()) return false;
   std::string bytes;
@@ -55,7 +57,7 @@ class RawGrpcService::Call {
       // Redis work for this call.
       new Call(owner_);
 
-      Request request;
+      GrpcRequest request;
       state_ = State::finish;
       if (!decode(request_, &request)) {
         responder_.FinishWithError(
@@ -65,8 +67,9 @@ class RawGrpcService::Call {
       }
 
       Response response;
+      auto cpp_request = rlc::grpc_conversion::FromProto(request);
       const auto status = owner_->implementation_.ShouldRateLimit(
-          &context_, &request, &response);
+          &context_, &cpp_request, &response);
       if (!status.ok()) {
         responder_.FinishWithError(status, this);
         return;
@@ -88,7 +91,7 @@ class RawGrpcService::Call {
   State state_ = State::request;
 };
 
-RawGrpcService::RawGrpcService(Service& implementation)
+RawGrpcService::RawGrpcService(rlc::Service& implementation)
     : implementation_(implementation) {}
 
 RawGrpcService::~RawGrpcService() { join(); }
