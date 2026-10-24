@@ -396,7 +396,7 @@ std::string Service::statsDump() const { return impl_->stats.dump(); }
 
 
 
-RateLimitStatus Service::ShouldRateLimit(grpc::ServerContext* /*context*/, const RateLimitRequest* request, GrpcRateLimitResponse* response) {
+RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRateLimitResponse* response) {
   try {
     if (request->domain().empty()) {
 	return {
