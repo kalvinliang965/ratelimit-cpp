@@ -10,6 +10,10 @@
 #include <unordered_map>
 
 
+namespace rlc {
+
+
+
 struct RateLimitResponse {
     enum class Code : int32_t {
         UNKNOWN = 0,
@@ -98,6 +102,36 @@ enum class RateLimitUnit : int32_t {
     YEAR = 6,
 };
 
+
+
+
+inline std::string ToString(RateLimitResponse::RateLimit::Unit unit) {
+    switch (unit) {
+        case RateLimitResponse::RateLimit::Unit::UNKNOWN: return "UNKNOWN";
+        case RateLimitResponse::RateLimit::Unit::SECOND: return "SECOND";
+        case RateLimitResponse::RateLimit::Unit::MINUTE: return "MINUTE";
+        case RateLimitResponse::RateLimit::Unit::HOUR: return "HOUR";
+        case RateLimitResponse::RateLimit::Unit::DAY: return "DAY";
+        case RateLimitResponse::RateLimit::Unit::MONTH: return "MONTH";
+        case RateLimitResponse::RateLimit::Unit::YEAR: return "YEAR";
+        case RateLimitResponse::RateLimit::Unit::WEEK: return "WEEK";
+    }
+    return "UNKNOWN";
+}
+
+inline std::string ToString(RateLimitUnit unit) {
+    switch (unit) {
+        case RateLimitUnit::UNKNOWN: return "UNKNOWN";
+        case RateLimitUnit::SECOND: return "SECOND";
+        case RateLimitUnit::MINUTE: return "MINUTE";
+        case RateLimitUnit::HOUR: return "HOUR";
+        case RateLimitUnit::DAY: return "DAY";
+        case RateLimitUnit::MONTH: return "MONTH";
+        case RateLimitUnit::YEAR: return "YEAR";
+    }
+    return "UNKNOWN";
+}
+
 enum class RateLimitStatusCode : int32_t {
     OK = 0,
     CANCELLED = 1,
@@ -173,3 +207,5 @@ struct RateLimitRequest {
     uint32_t hits_addend_ = 0;
     uint32_t hits_addend() const { return hits_addend_; }
 };
+
+}  // namespace rlc

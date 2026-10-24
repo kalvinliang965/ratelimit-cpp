@@ -257,6 +257,9 @@ GrpcRateLimitResponse ToProto(const RateLimitResponse& source) {
 
 // Standalone exercise: compile this file separately from src/main.cc.
 #ifdef RATELIMIT_CONVERSION_TEST
+using rlc::RateLimitRequest;
+using rlc::RateLimitDescriptor;
+using rlc::RateLimitUnit;
 void TestDescriptorConversions() {
     using rlc::grpc_conversion::FromProto;
     using rlc::grpc_conversion::ToProto;
