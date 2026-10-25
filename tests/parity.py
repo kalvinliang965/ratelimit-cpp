@@ -236,8 +236,52 @@ def expected(code=None, remaining=None, status_codes=None):
     return check
 
 
+def expected_headers(kind):
+    """Check header contents independently of an optional Go reference server."""
+    def check(response):
+        expected(rls.RateLimitResponse.OK, [8])(response)
+        response_headers = list(response.response_headers_to_add)
+        request_headers = list(response.request_headers_to_add)
+        headers = request_headers if kind == "request" else response_headers
+        unused = response_headers if kind == "request" else request_headers
+        assert not unused, ("unexpected headers in the other direction", unused)
+        if kind == "per_unit":
+            wanted = {"RateLimit-Limit-Hours": "9", "RateLimit-Remaining-Hours": "8"}
+        else:
+            prefix = "x-request-" if kind == "request" else "x-response-"
+            wanted = {prefix + "limit": "9", prefix + "remaining": "8", prefix + "reset": None}
+        # Check the length before constructing a dict, so duplicate keys cannot
+        # hide an incorrectly appended or overwritten header.
+        assert len(headers) == len(wanted), (kind, "header count", headers, wanted)
+        actual = {header.key: header.value for header in headers}
+        assert set(actual) == set(wanted), (kind, "header names", actual, wanted)
+        for key, value in wanted.items():
+            if value is None:
+                assert actual[key].isdigit() and 1 <= int(actual[key]) <= 3600, (key, actual[key])
+            else:
+                assert actual[key] == value, (key, actual[key], value)
+    return check
+
+
 def scenarios():
     ok, over = rls.RateLimitResponse.OK, rls.RateLimitResponse.OVER_LIMIT
+    # These assertions run under make test, without requiring --go.
+    for kind, enabled in [("response", "LIMIT_RESPONSE_HEADERS_ENABLED"),
+                          ("request", "LIMIT_REQUEST_HEADERS_ENABLED"),
+                          ("per_unit", "LIMIT_PER_UNIT_HEADERS_ENABLED")]:
+        settings = {"LIMIT_RESPONSE_HEADERS_ENABLED": "false",
+                    "LIMIT_REQUEST_HEADERS_ENABLED": "false",
+                    "LIMIT_PER_UNIT_HEADERS_ENABLED": "false",
+                    "LIMIT_LIMIT_HEADER": "x-response-limit",
+                    "LIMIT_REMAINING_HEADER": "x-response-remaining",
+                    "LIMIT_RESET_HEADER": "x-response-reset",
+                    "LIMIT_REQUEST_LIMIT_HEADER": "x-request-limit",
+                    "LIMIT_REQUEST_REMAINING_HEADER": "x-request-remaining",
+                    "LIMIT_REQUEST_RESET_HEADER": "x-request-reset"}
+        settings[enabled] = "true"
+        yield ("header_entries_" + kind, policy(rule("headers", 9, unit="hour")),
+               settings, [(one("headers"), expected_headers(kind))])
+
     basic = policy(rule("basic"), rule("blocked", 0),
                    rule("unlimited", rate_limit={"unlimited": True}),
                    rule("shadow", 1, shadow_mode=True))

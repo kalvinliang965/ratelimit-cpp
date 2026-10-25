@@ -1,4 +1,5 @@
 #include "config.h"
+#include "grpc_conversion.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -12,12 +13,10 @@ void check(bool condition, const std::string& message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-GrpcRateLimitDescriptor descriptor(std::initializer_list<std::pair<std::string, std::string>> entries) {
-  GrpcRateLimitDescriptor result;
+RateLimitDescriptor descriptor(std::initializer_list<std::pair<std::string, std::string>> entries) {
+  RateLimitDescriptor result;
   for (const auto& entry : entries) {
-    auto* added = result.add_entries();
-    added->set_key(entry.first);
-    added->set_value(entry.second);
+    result.entries_.push_back({entry.first, entry.second});
   }
   return result;
 }
@@ -88,8 +87,7 @@ descriptors:
   result = config->find("test", descriptor({{"open", "anything"}}));
   check(result && result->unlimited && result->shadow && result->quota && result->replaces == std::vector<std::string>{"old"}, "unlimited flags and replaces");
   auto request = descriptor({{"unconfigured", "value"}});
-  request.mutable_limit()->set_requests_per_unit(17);
-  request.mutable_limit()->set_unit(envoy::type::v3::RateLimitUnit::MINUTE);
+  request.limit_ = RateLimitDescriptor::Override{17, RateLimitUnit::MINUTE};
   result = config->find("test", request);
   check(result && result->limit.requests_per_unit() == 17 && !result->shadow && result->full_key == "test.unconfigured_value", "limit override");
   check(!config->find("missing", request), "override must not create domain");
@@ -143,10 +141,10 @@ descriptors:
   check(!result->metadata, "enhanced key must preserve Go metadata recreation quirk");
   result = config->find("test", descriptor({{"metadata", "v"}}));
   check(result && result->metadata, "plain metadata missing");
-  const auto& values = result->metadata->fields();
-  check(values.at("text").string_value() == "yes" && values.at("truth").bool_value(), "YAML quoted and boolean metadata types");
-  check(values.at("integer").number_value() == 10 && values.at("float").number_value() == 2.5, "YAML numeric metadata types");
-  check(values.at("array").list_value().values(3).struct_value().fields().at("3").list_value().values(1).string_value() == "4", "nested metadata values");
+  const auto& values = *result->metadata;
+  check(values.at("text").get<std::string>() == "yes" && values.at("truth").get<bool>(), "YAML quoted and boolean metadata types");
+  check(values.at("integer").get<int64_t>() == 10 && values.at("float").get<double>() == 2.5, "YAML numeric metadata types");
+  check(values.at("array")[3].at("3")[1].get<std::string>() == "4", "nested metadata values");
   result = config->find("test", descriptor({{"detail", ""}}));
   check(result && result->full_key == "test.detail_", "detailed empty value includes underscore");
   result = config->find("test", descriptor({{"parent", ""}}));
