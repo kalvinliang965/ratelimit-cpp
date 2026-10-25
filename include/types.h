@@ -72,7 +72,7 @@ struct RateLimitResponse {
 		return current_limit_.value();
 	}
 
-	const uint32_t limit_remaining() const {
+uint32_t limit_remaining() const {
 		return limit_remaining_;
 	}
 

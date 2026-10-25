@@ -1,7 +1,8 @@
 #ifndef GRPC_CONVERSION_H
 #define GRPC_CONVERSION_H
 
-#include "common.h"
+#include "grpc_types.h"
+#include "types.h"
 
 
 namespace rlc::grpc_conversion {

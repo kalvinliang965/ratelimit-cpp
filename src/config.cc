@@ -1,4 +1,6 @@
 #include "config.h"
+#include "grpc_types.h"
+#include "grpc_conversion.h"
 
 #include <yaml-cpp/yaml.h>
 
@@ -368,7 +370,7 @@ std::shared_ptr<Config> Config::load(const std::vector<std::pair<std::string, st
   return config;
 }
 
-std::optional<Limit> Config::find(const std::string& domain, const GrpcRateLimitDescriptor& descriptor) const {
+std::optional<Limit> Config::find(const std::string& domain, const RateLimitDescriptor& descriptor) const {
   const auto domain_entry = impl_->domains.find(domain);
   if (domain_entry == impl_->domains.end()) return std::nullopt;
   if (descriptor.has_limit()) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "types.h"
 #include <memory>
 #include <optional>
 #include <vector>
@@ -19,7 +20,7 @@ class Config {
   Config();
   ~Config();
   static std::shared_ptr<Config> load(const std::vector<std::pair<std::string, std::string>>& documents, bool merge = false);
-  std::optional<Limit> find(const std::string& domain, const GrpcRateLimitDescriptor& descriptor) const;
+  std::optional<Limit> find(const std::string& domain, const RateLimitDescriptor& descriptor) const;
   bool empty() const;
   std::string dump() const;
  private:

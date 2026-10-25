@@ -4,27 +4,8 @@
 #include <string>
 #include <stdexcept>
 #include <algorithm>
-#include "envoy/service/ratelimit/v3/rls.pb.h"
-#include "types.h"
-#include <grpcpp/grpcpp.h>
 
 namespace rlc {
-namespace pb = envoy::service::ratelimit::v3;
-namespace common = envoy::extensions::common::ratelimit::v3;
-
-// Shared application types are defined in namespace rlc by types.h.
-
-// gRPC frontend / protobuf types. Service response and config migration is still pending.
-using GrpcRateLimitRequest = pb::RateLimitRequest;
-using GrpcRateLimitResponse = pb::RateLimitResponse;
-using GrpcRateLimitDescriptor = common::RateLimitDescriptor;
-using GrpcRateLimitDescriptorStatus = pb::RateLimitResponse::DescriptorStatus;
-using GrpcRateLimitUnit = pb::RateLimitResponse_RateLimit_Unit;
-
-// RPC operation status, distinct from a descriptor's OK/OVER_LIMIT decision.
-using GrpcRateLimitStatus = grpc::Status;
-using GrpcRateLimitStatusCode = grpc::StatusCode;
-
 inline std::string env(const char* key, const std::string& fallback = "") {
   const char* value = std::getenv(key); return value ? value : fallback;
 }

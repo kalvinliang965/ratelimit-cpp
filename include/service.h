@@ -1,6 +1,5 @@
 #pragma once
 #include "config.h"
-#include "envoy/service/ratelimit/v3/rls.grpc.pb.h"
 #include <mutex>
 #include "common.h"
 

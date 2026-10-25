@@ -451,7 +451,7 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
     std::unordered_set<std::string> replaces;
 
     for (int i = 0; i < count; ++i) {
-      limits[i] = config->find(request->domain(), grpc_conversion::ToProto(request->descriptors(i)));
+      limits[i] = config->find(request->domain(), request->descriptors(i));
       if (limits[i]) {
         for (const auto& name : limits[i]->replaces) replaces.insert(name);
         if (limits[i]->unlimited) { unlimited[i] = true; limits[i].reset(); }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "service.h"
+#include "grpc_types.h"
+#include "envoy/service/ratelimit/v3/rls.grpc.pb.h"
 
 #include <grpcpp/grpcpp.h>
 
