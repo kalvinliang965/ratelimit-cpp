@@ -15,9 +15,6 @@
 namespace rlc {
 namespace {
 
-using Struct = google::protobuf::Struct;
-using Value = google::protobuf::Value;
-
 constexpr auto OK = RateLimitResponse::Code::OK;
 constexpr auto OVER = RateLimitResponse::Code::OVER_LIMIT;
 
@@ -89,13 +86,14 @@ std::string groupKey(const GrpcRateLimitDescriptor& descriptor) {
   }
   return backend.empty() && model.empty() ? all : backend + "|" + model;
 }
-void mergeMetadata(Struct& destination, const Struct& source) {
-  auto& fields = *destination.mutable_fields();
-  for (const auto& [key, value] : source.fields()) {
-    auto found = fields.find(key);
-    if (found == fields.end()) fields[key] = value;
-    else if (found->second.has_struct_value() && value.has_struct_value())
-      mergeMetadata(*found->second.mutable_struct_value(), value.struct_value());
+void mergeMetadata(nlohmann::json& destination, const nlohmann::json& source) {
+  for (const auto& [key, value] : source.items()) {
+    auto found = destination.find(key);
+    if (found == destination.end()) {
+      destination[key] = value;
+    } else if (found->is_object() && value.is_object()) {
+      mergeMetadata(*found, value);
+    }
   }
 }
 std::string overrideString(const GrpcRateLimitDescriptor& descriptor) {
@@ -110,25 +108,28 @@ std::string overrideString(const GrpcRateLimitDescriptor& descriptor) {
   }
   return value;
 }
-Struct metadataFor(const RateLimitRequest& request, const std::vector<int>& passed,
-                   const std::vector<std::optional<Limit>>& limits, bool quota) {
-  Struct out;
-  auto& fields = *out.mutable_fields();
-  fields["domain"].set_string_value(request.domain());
-  auto* descriptors = fields["descriptors"].mutable_list_value();
+nlohmann::json metadataFor(const RateLimitRequest& request, const std::vector<int>& passed,
+                           const std::vector<std::optional<Limit>>& limits, bool quota) {
+  nlohmann::json out = nlohmann::json::object();
+  out["domain"] = request.domain();
+  out["descriptors"] = nlohmann::json::array();
   for (const auto& descriptor : request.descriptors()) {
-    auto& item = *descriptors->add_values()->mutable_struct_value()->mutable_fields();
-    auto* entries = item["entries"].mutable_list_value();
-    for (const auto& entry : descriptor.entries()) entries->add_values()->set_string_value(entry.key()+"="+entry.value());
-    if (descriptor.has_limit()) item["limit"].set_string_value(overrideString(grpc_conversion::ToProto(descriptor)));
-    if (descriptor.has_hits_addend()) item["hitsAddend"].set_number_value(static_cast<double>(descriptor.hits_addend().value()));
+    nlohmann::json item = nlohmann::json::object();
+    item["entries"] = nlohmann::json::array();
+    for (const auto& entry : descriptor.entries()) {
+      item["entries"].push_back(entry.key() + "=" + entry.value());
+    }
+    if (descriptor.has_limit()) item["limit"] = overrideString(grpc_conversion::ToProto(descriptor));
+    if (descriptor.has_hits_addend()) item["hitsAddend"] = static_cast<double>(descriptor.hits_addend().value());
+    out["descriptors"].push_back(std::move(item));
   }
-  if (request.hits_addend()) fields["hitsAddend"].set_number_value(request.hits_addend());
-  Struct passed_metadata;
+  if (request.hits_addend()) out["hitsAddend"] = request.hits_addend();
+  nlohmann::json passed_metadata = nlohmann::json::object();
   for (int index : passed) if (limits[index] && limits[index]->metadata) mergeMetadata(passed_metadata, *limits[index]->metadata);
-  if (!passed_metadata.fields().empty()) *fields["metadata"].mutable_struct_value() = std::move(passed_metadata);
+  if (!passed_metadata.empty()) out["metadata"] = std::move(passed_metadata);
   if (quota) {
     std::unordered_set<std::string> seen;
+    nlohmann::json passed_backends = nlohmann::json::array();
     for (int index : passed) {
       const auto& descriptor = request.descriptors(index);
       const auto key = groupKey(grpc_conversion::ToProto(descriptor));
@@ -140,10 +141,12 @@ Struct metadataFor(const RateLimitRequest& request, const std::vector<int>& pass
       }
       if (backend.empty() && model.empty()) continue;
       seen.insert(key);
-      auto& entry = *fields["passedBackends"].mutable_list_value()->add_values()->mutable_struct_value()->mutable_fields();
-      entry["backend_name"].set_string_value(backend);
-      entry["model_name_override"].set_string_value(model);
+      nlohmann::json entry = nlohmann::json::object();
+      entry["backend_name"] = backend;
+      entry["model_name_override"] = model;
+      passed_backends.push_back(std::move(entry));
     }
+    if (!passed_backends.empty()) out["passedBackends"] = std::move(passed_backends);
   }
   return out;
 }
@@ -572,8 +575,7 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
 	}
         available.push_back(index);
       }
-    response->dynamic_metadata_ = grpc_conversion::FromProto(
-        metadataFor(*request, available, limits, !quota_groups.empty()));
+    response->dynamic_metadata_ = metadataFor(*request, available, limits, !quota_groups.empty());
     }
     response->set_overall_code(final_code);
     return {RateLimitStatusCode::OK, ""};

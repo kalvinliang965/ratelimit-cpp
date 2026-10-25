@@ -4,6 +4,7 @@
 #include <optional>
 #include <vector>
 #include <utility>
+#include <nlohmann/json.hpp>
 namespace rlc {
 struct Limit {
   RateLimitResponse::RateLimit limit;
@@ -11,7 +12,7 @@ struct Limit {
   std::string full_key;
   std::vector<std::string> replaces;
   std::vector<std::string> share_patterns;
-  std::optional<google::protobuf::Struct> metadata;
+  std::optional<nlohmann::json> metadata;
 };
 class Config {
  public:

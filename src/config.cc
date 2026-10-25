@@ -162,7 +162,7 @@ uint32_t readRequests(const YAML::Node& map, const std::string& file) {
   return static_cast<uint32_t>(value.integer);
 }
 
-google::protobuf::Value metadataValue(const YAML::Node& node);
+nlohmann::json metadataValue(const YAML::Node& node);
 
 std::string nestedMetadataKey(const YAML::Node& node) {
   if (node.IsNull()) return "<nil>";
@@ -177,36 +177,35 @@ std::string nestedMetadataKey(const YAML::Node& node) {
   }
 }
 
-google::protobuf::Struct metadataMap(const YAML::Node& node, bool top_level) {
-  google::protobuf::Struct result;
+nlohmann::json metadataMap(const YAML::Node& node, bool top_level) {
+  nlohmann::json result = nlohmann::json::object();
   if (!node.IsMap()) throw std::runtime_error("metadata must be a map");
   for (const auto& pair : node) {
     const std::string key = top_level && pair.first.IsScalar() ? pair.first.Scalar() : nestedMetadataKey(pair.first);
-    (*result.mutable_fields())[key] = metadataValue(pair.second);
+    result[key] = metadataValue(pair.second);
   }
   return result;
 }
 
-google::protobuf::Value metadataValue(const YAML::Node& node) {
-  google::protobuf::Value value;
+nlohmann::json metadataValue(const YAML::Node& node) {
   if (node.IsNull()) {
-    value.set_null_value(google::protobuf::NULL_VALUE);
+    return nullptr;
   } else if (node.IsMap()) {
-    *value.mutable_struct_value() = metadataMap(node, false);
+    return metadataMap(node, false);
   } else if (node.IsSequence()) {
-    auto* list = value.mutable_list_value();
-    for (const auto& element : node) *list->add_values() = metadataValue(element);
+    nlohmann::json result = nlohmann::json::array();
+    for (const auto& element : node) result.push_back(metadataValue(element));
+    return result;
   } else {
     const auto scalar = resolveScalar(node);
     switch (scalar.kind) {
-      case ScalarKind::Bool: value.set_bool_value(scalar.boolean); break;
-      case ScalarKind::Integer: value.set_number_value(static_cast<double>(scalar.integer)); break;
-      case ScalarKind::UnsignedInteger: value.set_number_value(static_cast<double>(scalar.unsigned_integer)); break;
-      case ScalarKind::Float: value.set_number_value(scalar.number); break;
-      default: value.set_string_value(node.Scalar()); break;
+      case ScalarKind::Bool: return scalar.boolean;
+      case ScalarKind::Integer: return static_cast<double>(scalar.integer);
+      case ScalarKind::UnsignedInteger: return static_cast<double>(scalar.unsigned_integer);
+      case ScalarKind::Float: return scalar.number;
+      default: return node.Scalar();
     }
   }
-  return value;
 }
 
 struct Wildcard {
@@ -245,7 +244,7 @@ struct Node {
   bool value_to_metric = false;
   bool share_threshold = false;
   std::string wildcard_pattern;
-  std::optional<google::protobuf::Struct> metadata;
+  std::optional<nlohmann::json> metadata;
 
   void load(const YAML::Node& list, const std::string& parent, const std::string& file) {
     if (absent(list)) return;
@@ -312,7 +311,7 @@ struct Node {
       if (!absent(metadata)) {
         try {
           auto converted = metadataMap(metadata, true);
-          if (!converted.fields().empty()) child->metadata = std::move(converted);
+          if (!converted.empty()) child->metadata = std::move(converted);
         } catch (const std::exception& error) {
           configError(file, std::string("error parsing metadata: ") + error.what());
         }
