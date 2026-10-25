@@ -6,13 +6,11 @@
 #include <vector>
 #include <utility>
 #include <cstddef>
-#include <variant>
+#include <nlohmann/json.hpp>
 #include <unordered_map>
 
 
 namespace rlc {
-
-
 
 struct RateLimitResponse {
     enum class Code : int32_t {
@@ -59,27 +57,30 @@ struct RateLimitResponse {
         uint32_t limit_remaining_ = 0;
         std::optional<Duration> duration_until_reset_;
         std::optional<Quota> quota_;
+
+	void set_code(Code code) {
+		code_ = code;
+	}
+	void set_limit_remaining(uint32_t limit_remaining) {
+		limit_remaining_ = limit_remaining;
+	}
+
     };
 
     struct HeaderValue {
         std::string key_;
         std::string value_;
         std::string raw_value_;
-    };
 
-    struct Value {
-        using Object = std::unordered_map<std::string, Value>;
-        using List = std::vector<Value>;
-        using Storage = std::variant<
-            std::monostate,  // Protobuf Value with no kind selected.
-            std::nullptr_t,  // Explicit null, distinct from an unset kind.
-            double,
-            std::string,
-            bool,
-            Object,
-            List
-        >;
-        Storage data_ = std::monostate{};
+      	void set_key(std::string key) {
+		key_ = key;
+	}
+	void set_value(std::string value) {
+		value_ = value;
+	}
+	void set_raw_value(std::string rv){
+		raw_value_ = rv;
+	}
     };
 
     Code overall_code_ = Code::UNKNOWN;
@@ -87,8 +88,27 @@ struct RateLimitResponse {
     std::vector<HeaderValue> response_headers_to_add_;
     std::vector<HeaderValue> request_headers_to_add_;
     std::string raw_body_;
-    std::optional<Value::Object> dynamic_metadata_;
+    // Absent metadata differs from a present empty JSON object.
+    std::optional<nlohmann::json> dynamic_metadata_;
     std::optional<Quota> quota_;
+
+    DescriptorStatus& add_statuses() {
+	return statuses_.emplace_back();
+    }
+
+    HeaderValue& add_response_header() {
+	return response_headers_to_add_.emplace_back();
+    }
+
+    HeaderValue& add_request_header() {
+	return request_headers_to_add_.emplace_back();
+    }
+
+    void set_overall_code(Code final_code) {
+	overall_code_ = final_code;
+    }
+
+   
 };
 
 // Numeric values match the descriptor override's protobuf RateLimitUnit.
@@ -105,7 +125,7 @@ enum class RateLimitUnit : int32_t {
 
 
 
-inline std::string ToString(RateLimitResponse::RateLimit::Unit unit) {
+inline std::string to_string(RateLimitResponse::RateLimit::Unit unit) {
     switch (unit) {
         case RateLimitResponse::RateLimit::Unit::UNKNOWN: return "UNKNOWN";
         case RateLimitResponse::RateLimit::Unit::SECOND: return "SECOND";
@@ -119,7 +139,7 @@ inline std::string ToString(RateLimitResponse::RateLimit::Unit unit) {
     return "UNKNOWN";
 }
 
-inline std::string ToString(RateLimitUnit unit) {
+inline std::string to_string(RateLimitUnit unit) {
     switch (unit) {
         case RateLimitUnit::UNKNOWN: return "UNKNOWN";
         case RateLimitUnit::SECOND: return "SECOND";

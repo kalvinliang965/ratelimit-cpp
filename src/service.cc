@@ -18,8 +18,8 @@ namespace {
 using Struct = google::protobuf::Struct;
 using Value = google::protobuf::Value;
 
-constexpr auto OK = pb::RateLimitResponse::OK;
-constexpr auto OVER = pb::RateLimitResponse::OVER_LIMIT;
+constexpr auto OK = RateLimitResponse::Code::OK;
+constexpr auto OVER = RateLimitResponse::Code::OVER_LIMIT;
 
 int64_t nowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -315,7 +315,7 @@ struct Service::Impl {
     std::vector<MemcacheUpdate> updates;
     for (size_t i = 0; i < count; ++i) {
       auto& status = statuses[i]; 
-      status.set_code(OK);
+      status.set_code(static_cast<GrpcRateLimitResponse::Code>(OK));
 
       if (keys[i].empty()) continue;
       const auto& limit = *limits[i];
@@ -325,7 +325,7 @@ struct Service::Impl {
       if (negative[i]) {
         status.set_limit_remaining(threshold > results[i] ? threshold-results[i] : 0);
       } else if (local_over[i] || results[i] > threshold) {
-        if (!limit.shadow) status.set_code(OVER);
+        if (!limit.shadow) status.set_code(static_cast<GrpcRateLimitResponse::Code>(OVER));
         if (!local_over[i]) cache(keys[i], limit.limit.unit());
       } else status.set_limit_remaining(threshold-results[i]);
 
@@ -396,7 +396,7 @@ std::string Service::statsDump() const { return impl_->stats.dump(); }
 
 
 
-RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRateLimitResponse* response) {
+RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLimitResponse* response) {
   try {
     if (request->domain().empty()) {
 	return {
@@ -448,17 +448,27 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRa
     std::unordered_map<std::string, bool> quota_groups;
     std::vector<std::string> descriptor_groups(count);
     bool ordinary_over = false;
-    response->Clear();
+
+    *response = RateLimitResponse{}; // clear state
+
     for (int i = 0; i < count; ++i) {
       const auto& status = statuses[i];
       if ((settings.headers || settings.request_headers) && status.has_current_limit() && status.limit_remaining() < min_remaining) {
         min_remaining = status.limit_remaining(); minimum = &status;
       }
-      auto* output = response->add_statuses();
-      if (unlimited[i]) { output->set_code(OK); output->set_limit_remaining(std::numeric_limits<uint32_t>::max()); continue; }
-      *output = status;
+
+     
+      auto& output = response->add_statuses();
+
+      if (unlimited[i]) { 
+	output.set_code(OK); 
+	output.set_limit_remaining(std::numeric_limits<uint32_t>::max()); 
+	continue; 
+      }
+      output = grpc_conversion::FromProto(status);
+
       const bool is_quota = settings.quota || (limits[i] && limits[i]->quota);
-      const bool over = status.code() == OVER;
+      const bool over = status.code() == static_cast<pb::RateLimitResponse::Code>(OVER);
       if (!over) passed.push_back(i);
       if (is_quota) {
         const auto key = groupKey(grpc_conversion::ToProto(request->descriptors(i)));
@@ -467,11 +477,20 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRa
       } else if (over) { ordinary_over = true; minimum = &status; min_remaining = 0; }
     }
     bool quota_over = !quota_groups.empty();
-    for (const auto& [key, over] : quota_groups) if (!over) quota_over = false;
+
+    for (const auto& [key, over] : quota_groups) {
+	if (!over) {
+		quota_over = false;
+	}
+    }
+
     auto final_code = ordinary_over || quota_over ? OVER : OK;
-    auto add_header = [](auto* headers, const std::string& key, const std::string& value) {
-      auto* header = headers->Add(); header->set_key(key); header->set_value(value);
+
+    auto add_header = [](auto& header, const std::string& key, const std::string& value) {
+      	header.set_key(key); 
+	header.set_value(value);
     };
+
     if (settings.per_unit_headers) {
       std::vector<int> units;
       std::unordered_map<int, const GrpcRateLimitDescriptorStatus*> closest;
@@ -483,32 +502,59 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRa
       }
       for (int unit : units) {
         const auto* status = closest[unit];
-        std::string suffix = pb::RateLimitResponse_RateLimit_Unit_Name(static_cast<GrpcRateLimitUnit>(unit));
+
+        std::string suffix = rlc::to_string(static_cast<RateLimitUnit>(unit));
+
         for (size_t i = 1; i < suffix.size(); ++i) suffix[i] = std::tolower(static_cast<unsigned char>(suffix[i]));
         suffix += "s";
-        add_header(response->mutable_response_headers_to_add(), "RateLimit-Limit-"+suffix, std::to_string(status->current_limit().requests_per_unit()));
-        add_header(response->mutable_response_headers_to_add(), "RateLimit-Remaining-"+suffix, std::to_string(status->limit_remaining()));
+
+	auto& header = response->add_response_header();
+
+        add_header(
+		header,
+		"RateLimit-Limit-"+suffix, 
+		std::to_string(status->current_limit().requests_per_unit())
+	);
+        add_header(
+		header,
+		"RateLimit-Remaining-"+suffix, 
+		std::to_string(status->limit_remaining())
+	);
       }
     }
-    auto add_standard_headers = [&](auto* headers, const std::string& limit, const std::string& remaining, const std::string& reset_name) {
+    auto add_standard_headers = [&](
+			auto& headers, const std::string& limit, 
+			const std::string& remaining, const std::string& reset_name
+    ) {
       add_header(headers, limit, std::to_string(minimum->current_limit().requests_per_unit()));
       add_header(headers, remaining, std::to_string(minimum->limit_remaining()));
       add_header(headers, reset_name, std::to_string(reset(minimum->current_limit().unit(), settings.calendar)));
     };
-    if (settings.headers && minimum) add_standard_headers(response->mutable_response_headers_to_add(), settings.limit_header, settings.remaining_header, settings.reset_header);
-    if (settings.request_headers && minimum) add_standard_headers(response->mutable_request_headers_to_add(), settings.request_limit_header, settings.request_remaining_header, settings.request_reset_header);
+
+    if (settings.headers && minimum) {
+	add_standard_headers(response->add_response_header(), settings.limit_header, settings.remaining_header, settings.reset_header);
+    }
+
+    if (settings.request_headers && minimum) {
+	add_standard_headers(response->add_request_header(), settings.request_limit_header, settings.request_remaining_header, settings.request_reset_header);
+    }
+
     if (final_code == OVER && settings.shadow) {
       impl_->stats.add("ratelimit.service.global_shadow_mode");
       final_code = OK;
     }
+
     if (settings.metadata) {
       std::vector<int> available;
       for (int index : passed) {
         const auto& key = descriptor_groups[index];
-        if (!key.empty() && quota_groups.count(key) && quota_groups[key]) continue;
+        if (!key.empty() && quota_groups.count(key) && quota_groups[key]) {
+		continue;
+	}
         available.push_back(index);
       }
-      *response->mutable_dynamic_metadata() = metadataFor(*request, available, limits, !quota_groups.empty());
+    response->dynamic_metadata_ = grpc_conversion::FromProto(
+        metadataFor(*request, available, limits, !quota_groups.empty()));
     }
     response->set_overall_code(final_code);
     return {RateLimitStatusCode::OK, ""};
@@ -518,7 +564,8 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, GrpcRa
         message.rfind("response returned from Conn:", 0) == 0;
     impl_->stats.add(backend_error ? "ratelimit.service.call.should_rate_limit.redis_error"
                                    : "ratelimit.service.call.should_rate_limit.service_error");
-    response->Clear(); return {RateLimitStatusCode::UNKNOWN, e.what()};
+    *response = RateLimitResponse{}; 
+    return {RateLimitStatusCode::UNKNOWN, e.what()};
   }
 }
 }

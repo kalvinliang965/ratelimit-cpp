@@ -28,12 +28,13 @@ RateLimitResponse::HeaderValue FromProto(const envoy::config::core::v3::HeaderVa
 envoy::config::core::v3::HeaderValue ToProto(const RateLimitResponse::HeaderValue& source);
 RateLimitResponse::DescriptorStatus FromProto(const GrpcRateLimitDescriptorStatus& source);
 GrpcRateLimitDescriptorStatus ToProto(const RateLimitResponse::DescriptorStatus& source);
-RateLimitResponse::Value::Object FromProto(const google::protobuf::Struct& source);
-google::protobuf::Struct ToProto(const RateLimitResponse::Value::Object& source);
-RateLimitResponse::Value::List FromProto(const google::protobuf::ListValue& source);
-google::protobuf::ListValue ToProto(const RateLimitResponse::Value::List& source);
-RateLimitResponse::Value FromProto(const google::protobuf::Value& source);
-google::protobuf::Value ToProto(const RateLimitResponse::Value& source);
+// Unset protobuf Value kinds normalize to JSON null; numbers use double.
+nlohmann::json FromProto(const google::protobuf::Struct& source);
+nlohmann::json FromProto(const google::protobuf::ListValue& source);
+nlohmann::json FromProto(const google::protobuf::Value& source);
+google::protobuf::Struct ToProtoStruct(const nlohmann::json& source);
+google::protobuf::ListValue ToProtoList(const nlohmann::json& source);
+google::protobuf::Value ToProtoValue(const nlohmann::json& source);
 RateLimitResponse FromProto(const GrpcRateLimitResponse& source);
 GrpcRateLimitResponse ToProto(const RateLimitResponse& source);
 

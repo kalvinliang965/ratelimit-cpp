@@ -4,7 +4,8 @@
 #include <cassert>
 #include <iostream>
 #include <utility>
-#include <type_traits>
+#include <cmath>
+#include <stdexcept>
 
 namespace rlc::grpc_conversion {
 
@@ -162,68 +163,67 @@ GrpcRateLimitDescriptorStatus ToProto(const RateLimitResponse::DescriptorStatus&
     return result;
 }
 
-RateLimitResponse::Value::Object FromProto(const google::protobuf::Struct& source) {
-    RateLimitResponse::Value::Object result;
-    for (const auto& field : source.fields()) {
-        result.emplace(field.first, FromProto(field.second));
-    }
+nlohmann::json FromProto(const google::protobuf::Struct& source) {
+    auto result = nlohmann::json::object();
+    for (const auto& field : source.fields()) result[field.first] = FromProto(field.second);
     return result;
 }
 
-google::protobuf::Struct ToProto(const RateLimitResponse::Value::Object& source) {
-    google::protobuf::Struct result;
-    for (const auto& field : source) {
-        (*result.mutable_fields())[field.first] = ToProto(field.second);
-    }
-    return result;
-}
-
-RateLimitResponse::Value::List FromProto(const google::protobuf::ListValue& source) {
-    RateLimitResponse::Value::List result;
-    result.reserve(source.values_size());
+nlohmann::json FromProto(const google::protobuf::ListValue& source) {
+    auto result = nlohmann::json::array();
     for (const auto& value : source.values()) result.push_back(FromProto(value));
     return result;
 }
 
-google::protobuf::ListValue ToProto(const RateLimitResponse::Value::List& source) {
-    google::protobuf::ListValue result;
-    for (const auto& value : source) *result.add_values() = ToProto(value);
-    return result;
+nlohmann::json FromProto(const google::protobuf::Value& source) {
+    switch (source.kind_case()) {
+        case google::protobuf::Value::kNullValue:
+        case google::protobuf::Value::KIND_NOT_SET:
+            // JSON has no separate representation for an unset protobuf kind.
+            return nullptr;
+        case google::protobuf::Value::kNumberValue:
+            if (!std::isfinite(source.number_value()))
+                throw std::invalid_argument("metadata numbers must be finite");
+            return source.number_value();
+        case google::protobuf::Value::kStringValue: return source.string_value();
+        case google::protobuf::Value::kBoolValue: return source.bool_value();
+        case google::protobuf::Value::kStructValue: return FromProto(source.struct_value());
+        case google::protobuf::Value::kListValue: return FromProto(source.list_value());
+    }
+    throw std::invalid_argument("unsupported protobuf metadata kind");
 }
 
-RateLimitResponse::Value FromProto(const google::protobuf::Value& source) {
-    RateLimitResponse::Value result;
-    switch (source.kind_case()) {
-        case google::protobuf::Value::kNullValue: result.data_ = nullptr; break;
-        case google::protobuf::Value::kNumberValue: result.data_ = source.number_value(); break;
-        case google::protobuf::Value::kStringValue: result.data_ = source.string_value(); break;
-        case google::protobuf::Value::kBoolValue: result.data_ = source.bool_value(); break;
-        case google::protobuf::Value::kStructValue: result.data_ = FromProto(source.struct_value()); break;
-        case google::protobuf::Value::kListValue: result.data_ = FromProto(source.list_value()); break;
-        case google::protobuf::Value::KIND_NOT_SET: break;
+// JSON uses one C++ type for objects, lists, and scalars, so these functions
+// have distinct names rather than overloads distinguished only by return type.
+google::protobuf::Struct ToProtoStruct(const nlohmann::json& source) {
+    if (!source.is_object()) throw std::invalid_argument("metadata must be a JSON object");
+    google::protobuf::Struct result;
+    for (const auto& field : source.items()) {
+        (*result.mutable_fields())[field.key()] = ToProtoValue(field.value());
     }
     return result;
 }
 
-google::protobuf::Value ToProto(const RateLimitResponse::Value& source) {
+google::protobuf::ListValue ToProtoList(const nlohmann::json& source) {
+    if (!source.is_array()) throw std::invalid_argument("metadata list must be a JSON array");
+    google::protobuf::ListValue result;
+    for (const auto& value : source) *result.add_values() = ToProtoValue(value);
+    return result;
+}
+
+google::protobuf::Value ToProtoValue(const nlohmann::json& source) {
     google::protobuf::Value result;
-    std::visit([&result](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, std::nullptr_t>) {
-            result.set_null_value(google::protobuf::NULL_VALUE);
-        } else if constexpr (std::is_same_v<T, double>) {
-            result.set_number_value(value);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            result.set_string_value(value);
-        } else if constexpr (std::is_same_v<T, bool>) {
-            result.set_bool_value(value);
-        } else if constexpr (std::is_same_v<T, RateLimitResponse::Value::Object>) {
-            *result.mutable_struct_value() = ToProto(value);
-        } else if constexpr (std::is_same_v<T, RateLimitResponse::Value::List>) {
-            *result.mutable_list_value() = ToProto(value);
-        }
-        // monostate deliberately leaves the protobuf kind unset.
-    }, source.data_);
+    if (source.is_null()) result.set_null_value(google::protobuf::NULL_VALUE);
+    else if (source.is_boolean()) result.set_bool_value(source.get<bool>());
+    else if (source.is_number()) {
+        // protobuf Value has only double, even when JSON stores an integer.
+        const double number = source.get<double>();
+        if (!std::isfinite(number)) throw std::invalid_argument("metadata numbers must be finite");
+        result.set_number_value(number);
+    } else if (source.is_string()) result.set_string_value(source.get<std::string>());
+    else if (source.is_object()) *result.mutable_struct_value() = ToProtoStruct(source);
+    else if (source.is_array()) *result.mutable_list_value() = ToProtoList(source);
+    else throw std::invalid_argument("unsupported JSON metadata type");
     return result;
 }
 
@@ -247,7 +247,7 @@ GrpcRateLimitResponse ToProto(const RateLimitResponse& source) {
     for (const auto& header : source.response_headers_to_add_) *result.add_response_headers_to_add() = ToProto(header);
     for (const auto& header : source.request_headers_to_add_) *result.add_request_headers_to_add() = ToProto(header);
     result.set_raw_body(source.raw_body_);
-    if (source.dynamic_metadata_) *result.mutable_dynamic_metadata() = ToProto(*source.dynamic_metadata_);
+    if (source.dynamic_metadata_) *result.mutable_dynamic_metadata() = ToProtoStruct(*source.dynamic_metadata_);
     if (source.quota_) *result.mutable_quota() = ToProto(*source.quota_);
     return result;
 }

@@ -15,7 +15,7 @@ class Service {
   bool backendHealthy() const;
   void recordConfigLoad(bool success);
   std::string statsDump() const;
-  RateLimitStatus ShouldRateLimit(const RateLimitRequest*, GrpcRateLimitResponse*);
+  RateLimitStatus ShouldRateLimit(const RateLimitRequest*, RateLimitResponse*);
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

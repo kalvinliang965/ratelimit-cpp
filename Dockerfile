@@ -14,6 +14,7 @@ RUN apt-get update \
         libprotobuf-dev \
         libssl-dev \
         libyaml-cpp-dev \
+        nlohmann-json3-dev \
         make \
         pkg-config \
         protobuf-compiler \

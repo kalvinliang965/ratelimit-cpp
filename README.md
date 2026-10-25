@@ -12,7 +12,7 @@ On a Debian/Ubuntu host with C++ development packages installed:
 
 ```sh
 sudo apt-get install build-essential protobuf-compiler protobuf-compiler-grpc \
-  libgrpc++-dev libprotobuf-dev libyaml-cpp-dev libssl-dev
+  libgrpc++-dev libprotobuf-dev libyaml-cpp-dev libssl-dev nlohmann-json3-dev
 make -j"$(nproc)"
 ```
 
