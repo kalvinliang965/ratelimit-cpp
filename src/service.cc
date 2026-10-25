@@ -78,7 +78,8 @@ std::string keyFor(
   else { const auto duration = divider(limit.limit.unit()); start = now/duration*duration; }
   return key + std::to_string(start);
 }
-std::string groupKey(const GrpcRateLimitDescriptor& descriptor) {
+
+std::string groupKey(const RateLimitDescriptor& descriptor) {
   std::string backend, model, all;
   for (const auto& entry : descriptor.entries()) {
     if (entry.key() == "backend_name") backend = entry.value();
@@ -87,6 +88,7 @@ std::string groupKey(const GrpcRateLimitDescriptor& descriptor) {
   }
   return backend.empty() && model.empty() ? all : backend + "|" + model;
 }
+
 void mergeMetadata(nlohmann::json& destination, const nlohmann::json& source) {
   for (const auto& [key, value] : source.items()) {
     auto found = destination.find(key);
@@ -97,15 +99,13 @@ void mergeMetadata(nlohmann::json& destination, const nlohmann::json& source) {
     }
   }
 }
-std::string overrideString(const GrpcRateLimitDescriptor& descriptor) {
+std::string overrideString(const RateLimitDescriptor& descriptor) {
   const auto& limit = descriptor.limit();
   std::string value;
   if (limit.requests_per_unit()) value = "requests_per_unit:" + std::to_string(limit.requests_per_unit());
-  if (limit.unit()) {
+  if (limit.unit() != RateLimitUnit::UNKNOWN) {
     if (!value.empty()) value += " ";
-    const auto* field = limit.GetDescriptor()->FindFieldByName("unit");
-    const auto* unit = field->enum_type()->FindValueByNumber(limit.unit());
-    value += "unit:" + (unit ? unit->name() : std::to_string(limit.unit()));
+    value += "unit:" + rlc::to_string(limit.unit());
   }
   return value;
 }
@@ -120,7 +120,7 @@ nlohmann::json metadataFor(const RateLimitRequest& request, const std::vector<in
     for (const auto& entry : descriptor.entries()) {
       item["entries"].push_back(entry.key() + "=" + entry.value());
     }
-    if (descriptor.has_limit()) item["limit"] = overrideString(grpc_conversion::ToProto(descriptor));
+    if (descriptor.has_limit()) item["limit"] = overrideString(descriptor);
     if (descriptor.has_hits_addend()) item["hitsAddend"] = static_cast<double>(descriptor.hits_addend().value());
     out["descriptors"].push_back(std::move(item));
   }
@@ -133,7 +133,7 @@ nlohmann::json metadataFor(const RateLimitRequest& request, const std::vector<in
     nlohmann::json passed_backends = nlohmann::json::array();
     for (int index : passed) {
       const auto& descriptor = request.descriptors(index);
-      const auto key = groupKey(grpc_conversion::ToProto(descriptor));
+      const auto key = groupKey(descriptor);
       if (seen.count(key)) continue;
       std::string backend, model;
       for (const auto& entry : descriptor.entries()) {
@@ -494,7 +494,7 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
       const bool over = status.code() == OVER;
       if (!over) passed.push_back(i);
       if (is_quota) {
-        const auto key = groupKey(grpc_conversion::ToProto(request->descriptors(i)));
+        const auto key = groupKey(request->descriptors(i));
         descriptor_groups[i] = key;
         quota_groups[key] = quota_groups[key] || over;
       } else if (over) { ordinary_over = true; minimum = &status; min_remaining = 0; }
@@ -546,16 +546,16 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
       }
     }
     auto add_standard_headers = [&](
-    	auto get_header, const std::string& limit, 
+    	auto append_header, const std::string& limit, 
 	const std::string& remaining, const std::string& reset_name
     ) {
-      auto& header1 = get_header();
+      auto& header1 = append_header();
       add_header(header1, limit, std::to_string(minimum->current_limit().requests_per_unit()));
 
-      auto& header2 = get_header();
+      auto& header2 = append_header();
       add_header(header2, remaining, std::to_string(minimum->limit_remaining()));
 
-      auto& header3 = get_header();
+      auto& header3 = append_header();
       add_header(header3, reset_name, std::to_string(reset(static_cast<RateLimitResponseUnit>(minimum->current_limit().unit()), settings.calendar)));
     };
 
