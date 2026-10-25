@@ -12,8 +12,8 @@ void check(bool condition, const std::string& message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-Descriptor descriptor(std::initializer_list<std::pair<std::string, std::string>> entries) {
-  Descriptor result;
+GrpcRateLimitDescriptor descriptor(std::initializer_list<std::pair<std::string, std::string>> entries) {
+  GrpcRateLimitDescriptor result;
   for (const auto& entry : entries) {
     auto* added = result.add_entries();
     added->set_key(entry.first);

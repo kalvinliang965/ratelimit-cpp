@@ -5,9 +5,8 @@
 #include <vector>
 #include <utility>
 namespace rlc {
-// translate this to cpp code too.
 struct Limit {
-  pb::RateLimitResponse_RateLimit limit;
+  RateLimitResponse::RateLimit limit;
   bool unlimited = false, shadow = false, quota = false, detailed = false;
   std::string full_key;
   std::vector<std::string> replaces;

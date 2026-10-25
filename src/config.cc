@@ -270,8 +270,14 @@ struct Node {
         auto unit_string = readString(rate, "unit", file);
         auto unit_upper = unit_string;
         std::transform(unit_upper.begin(), unit_upper.end(), unit_upper.begin(), [](unsigned char c) { return std::toupper(c); });
-        GrpcRateLimitUnit unit = pb::RateLimitResponse_RateLimit_Unit_UNKNOWN;
-        const bool valid_unit = pb::RateLimitResponse_RateLimit_Unit_Parse(unit_upper, &unit) && unit != pb::RateLimitResponse_RateLimit_Unit_UNKNOWN;
+        using Unit = RateLimitResponse::RateLimit::Unit;
+        static const std::map<std::string, Unit> units = {
+            {"SECOND", Unit::SECOND}, {"MINUTE", Unit::MINUTE},
+            {"HOUR", Unit::HOUR}, {"DAY", Unit::DAY},
+            {"WEEK", Unit::WEEK}, {"MONTH", Unit::MONTH}, {"YEAR", Unit::YEAR}};
+        const auto found_unit = units.find(unit_upper);
+        const bool valid_unit = found_unit != units.end();
+        const auto unit = valid_unit ? found_unit->second : Unit::UNKNOWN;
         if (limit.unlimited && valid_unit) configError(file, "should not specify rate limit unit when unlimited");
         if (!limit.unlimited && !valid_unit) configError(file, "invalid rate limit unit '" + unit_string + "'");
         limit.limit.set_unit(unit);
@@ -317,7 +323,7 @@ struct Node {
   }
 
   void dump(std::ostringstream& out) const {
-    if (limit) out << limit->full_key << ": unit=" << pb::RateLimitResponse_RateLimit_Unit_Name(limit->limit.unit())
+    if (limit) out << limit->full_key << ": unit=" << rlc::to_string(limit->limit.unit())
                    << " requests_per_unit=" << limit->limit.requests_per_unit()
                    << ", shadow_mode: " << (limit->shadow ? "true" : "false")
                    << ", quota_mode: " << (limit->quota ? "true" : "false") << '\n';
@@ -377,7 +383,7 @@ std::optional<Limit> Config::find(const std::string& domain, const GrpcRateLimit
     }
     result.full_key += entries_key;
     result.limit.set_requests_per_unit(descriptor.limit().requests_per_unit());
-    result.limit.set_unit(static_cast<GrpcRateLimitUnit>(descriptor.limit().unit()));
+    result.limit.set_unit(static_cast<RateLimitResponse::RateLimit::Unit>(descriptor.limit().unit()));
     return result;
   }
   const Node* current = &domain_entry->second;

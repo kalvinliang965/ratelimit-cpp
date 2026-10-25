@@ -33,6 +33,14 @@ struct RateLimitResponse {
         std::string name_;
         uint32_t requests_per_unit_ = 0;
         Unit unit_ = Unit::UNKNOWN;
+
+        const std::string& name() const { return name_; }
+        uint32_t requests_per_unit() const { return requests_per_unit_; }
+        Unit unit() const { return unit_; }
+
+        void set_name(std::string name) { name_ = std::move(name); }
+        void set_requests_per_unit(uint32_t value) { requests_per_unit_ = value; }
+        void set_unit(Unit unit) { unit_ = unit; }
     };
 
     struct Timestamp {

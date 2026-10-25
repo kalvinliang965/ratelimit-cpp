@@ -74,8 +74,8 @@ std::string keyFor(
     key += entries[i].key() + "_" + (pattern.empty() ? entries[i].value() : pattern) + "_";
   }
   int64_t start;
-  if (calendar && static_cast<ResponseUnit>(limit.limit.unit()) == ResponseUnit::MONTH) start = monthStart(now);
-  else { const auto duration = divider(static_cast<ResponseUnit>(limit.limit.unit())); start = now/duration*duration; }
+  if (calendar && limit.limit.unit() == ResponseUnit::MONTH) start = monthStart(now);
+  else { const auto duration = divider(limit.limit.unit()); start = now/duration*duration; }
   return key + std::to_string(start);
 }
 std::string groupKey(const GrpcRateLimitDescriptor& descriptor) {
@@ -284,7 +284,7 @@ struct Service::Impl {
     if (redis) {
       std::vector<RedisCommand> main_commands, second_commands;
       auto pipeline = [&](size_t i) -> std::vector<RedisCommand>& {
-        return per_second && static_cast<ResponseUnit>(limits[i]->limit.unit()) == ResponseUnit::SECOND ? second_commands : main_commands;
+        return per_second && limits[i]->limit.unit() == ResponseUnit::SECOND ? second_commands : main_commands;
       };
       auto execute = [&] {
         redis->pipeline(main_commands);
@@ -302,7 +302,7 @@ struct Service::Impl {
       for (size_t i = 0; i < count; ++i) {
         if (keys[i].empty() || local_over[i]) continue;
         auto& commands = pipeline(i);
-        const auto expiry = std::to_string(ttl(static_cast<ResponseUnit>(limits[i]->limit.unit())));
+        const auto expiry = std::to_string(ttl(limits[i]->limit.unit()));
         if (negative[i]) commands.push_back({keys[i], {"EVAL", decrementScript, "1", keys[i], std::to_string(hits[i]), expiry}, &results[i]});
         else {
           uint64_t increment = hits[i];
@@ -332,14 +332,14 @@ struct Service::Impl {
 
       if (keys[i].empty()) continue;
       const auto& limit = *limits[i];
-      *status.mutable_current_limit() = limit.limit;
-      status.mutable_duration_until_reset()->set_seconds(reset(static_cast<ResponseUnit>(limit.limit.unit()), calendar));
+      *status.mutable_current_limit() = grpc_conversion::ToProto(limit.limit);
+      status.mutable_duration_until_reset()->set_seconds(reset(limit.limit.unit(), calendar));
       const uint64_t threshold = limit.limit.requests_per_unit();
       if (negative[i]) {
         status.set_limit_remaining(threshold > results[i] ? threshold-results[i] : 0);
       } else if (local_over[i] || results[i] > threshold) {
         if (!limit.shadow) status.set_code(static_cast<GrpcRateLimitResponse::Code>(OVER));
-        if (!local_over[i]) cache(keys[i], static_cast<ResponseUnit>(limit.limit.unit()));
+        if (!local_over[i]) cache(keys[i], limit.limit.unit());
       } else status.set_limit_remaining(threshold-results[i]);
 
       if (!negative[i]) {
@@ -375,7 +375,7 @@ struct Service::Impl {
       }
 
       if (memcache && !local_over[i]) {
-	updates.push_back({keys[i], hits[i], ttl(static_cast<ResponseUnit>(limit.limit.unit())), negative[i]});
+	updates.push_back({keys[i], hits[i], ttl(limit.limit.unit()), negative[i]});
       }
     }
 

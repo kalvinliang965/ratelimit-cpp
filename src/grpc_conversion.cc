@@ -109,9 +109,9 @@ RateLimitResponse::RateLimit FromProto(const GrpcRateLimitResponse::RateLimit& s
 
 GrpcRateLimitResponse::RateLimit ToProto(const RateLimitResponse::RateLimit& source) {
     GrpcRateLimitResponse::RateLimit result;
-    result.set_name(source.name_);
-    result.set_requests_per_unit(source.requests_per_unit_);
-    result.set_unit(static_cast<GrpcRateLimitUnit>(source.unit_));
+    result.set_name(source.name());
+    result.set_requests_per_unit(source.requests_per_unit());
+    result.set_unit(static_cast<GrpcRateLimitUnit>(source.unit()));
     return result;
 }
 
