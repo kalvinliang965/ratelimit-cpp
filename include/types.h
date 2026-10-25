@@ -51,6 +51,8 @@ struct RateLimitResponse {
     struct Duration {
         int64_t seconds_ = 0;
         int32_t nanos_ = 0;
+	Duration(int64_t second, int32_t nano) 
+		:seconds_(second), nanos_(nano) {}
     };
 
     struct Quota {
@@ -66,11 +68,36 @@ struct RateLimitResponse {
         std::optional<Duration> duration_until_reset_;
         std::optional<Quota> quota_;
 
+	const RateLimit& current_limit() const {
+		return current_limit_.value();
+	}
+
+	const uint32_t limit_remaining() const {
+		return limit_remaining_;
+	}
+
+	const Code& code() const {
+		return code_;
+	}
+
 	void set_code(Code code) {
 		code_ = code;
 	}
+
 	void set_limit_remaining(uint32_t limit_remaining) {
 		limit_remaining_ = limit_remaining;
+	}
+	
+	void set_current_limit(RateLimit limit) {
+		current_limit_ = limit;
+	}
+
+	bool has_current_limit() const {
+	    return current_limit_.has_value();
+	}
+
+	void set_duration_until_reset(Duration d) {
+		duration_until_reset_ = d;
 	}
 
     };

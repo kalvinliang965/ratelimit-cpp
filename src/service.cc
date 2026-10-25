@@ -21,21 +21,23 @@ using Value = google::protobuf::Value;
 constexpr auto OK = RateLimitResponse::Code::OK;
 constexpr auto OVER = RateLimitResponse::Code::OVER_LIMIT;
 
-using ResponseUnit = RateLimitResponse::RateLimit::Unit;
+using RateLimitResponseUnit = RateLimitResponse::RateLimit::Unit;
+
+using RateLimitDescriptorStatus = RateLimitResponse::DescriptorStatus;
 
 int64_t nowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-int64_t divider(ResponseUnit unit) {
+int64_t divider(RateLimitResponseUnit unit) {
   switch (unit) {
-    case ResponseUnit::SECOND: return 1;
-    case ResponseUnit::MINUTE: return 60;
-    case ResponseUnit::HOUR: return 3600;
-    case ResponseUnit::DAY: return 86400;
-    case ResponseUnit::WEEK: return 7*86400;
-    case ResponseUnit::MONTH: return 30*86400;
-    case ResponseUnit::YEAR: return 365*86400;
+    case RateLimitResponseUnit::SECOND: return 1;
+    case RateLimitResponseUnit::MINUTE: return 60;
+    case RateLimitResponseUnit::HOUR: return 3600;
+    case RateLimitResponseUnit::DAY: return 86400;
+    case RateLimitResponseUnit::WEEK: return 7*86400;
+    case RateLimitResponseUnit::MONTH: return 30*86400;
+    case RateLimitResponseUnit::YEAR: return 365*86400;
     default: throw std::runtime_error("unknown rate limit unit");
   }
 }
@@ -48,14 +50,14 @@ int64_t monthStart(int64_t now, bool next = false) {
   return timegm(&date);
 }
 
-int64_t reset(ResponseUnit unit, bool calendar) {
+int64_t reset(RateLimitResponseUnit unit, bool calendar) {
   const auto now = nowSeconds();
-  if (calendar && unit == ResponseUnit::MONTH) return monthStart(now, true)-now;
+  if (calendar && unit == RateLimitResponseUnit::MONTH) return monthStart(now, true)-now;
   const auto seconds = divider(unit); return seconds-now%seconds;
 }
 
-int64_t expiration(ResponseUnit unit, bool calendar) {
-  if (calendar && unit == ResponseUnit::MONTH) {
+int64_t expiration(RateLimitResponseUnit unit, bool calendar) {
+  if (calendar && unit == RateLimitResponseUnit::MONTH) {
 	return reset(unit, true);
   }
   return divider(unit);
@@ -74,7 +76,7 @@ std::string keyFor(
     key += entries[i].key() + "_" + (pattern.empty() ? entries[i].value() : pattern) + "_";
   }
   int64_t start;
-  if (calendar && limit.limit.unit() == ResponseUnit::MONTH) start = monthStart(now);
+  if (calendar && limit.limit.unit() == RateLimitResponseUnit::MONTH) start = monthStart(now);
   else { const auto duration = divider(limit.limit.unit()); start = now/duration*duration; }
   return key + std::to_string(start);
 }
@@ -221,7 +223,7 @@ struct Service::Impl {
     return true;
   }
 
-  void cache(const std::string& key, ResponseUnit unit) {
+  void cache(const std::string& key, RateLimitResponseUnit unit) {
     if (!cache_budget) return;
     const size_t size = key.size()+24;
     // freecache reserves at least 512 KiB and rejects entries exceeding 1/1024
@@ -241,7 +243,7 @@ struct Service::Impl {
     local.emplace(key, LocalEntry{nowSeconds()+expiration(unit, calendar), size, lru.begin()});
     cache_bytes += size;
   }
-  int64_t ttl(ResponseUnit unit) {
+  int64_t ttl(RateLimitResponseUnit unit) {
     int64_t value = expiration(unit, calendar);
     if (jitter_max > 0) {
       std::lock_guard<std::mutex> lock(random_mutex);
@@ -249,7 +251,7 @@ struct Service::Impl {
     }
     return value;
   }
-  std::vector<GrpcRateLimitDescriptorStatus> limit(const RateLimitRequest& request, const std::vector<std::optional<Limit>>& limits) {
+  std::vector<RateLimitDescriptorStatus> limit(const RateLimitRequest& request, const std::vector<std::optional<Limit>>& limits) {
     const size_t count = limits.size();
 
     std::vector<std::string> keys(count);
@@ -284,7 +286,7 @@ struct Service::Impl {
     if (redis) {
       std::vector<RedisCommand> main_commands, second_commands;
       auto pipeline = [&](size_t i) -> std::vector<RedisCommand>& {
-        return per_second && limits[i]->limit.unit() == ResponseUnit::SECOND ? second_commands : main_commands;
+        return per_second && limits[i]->limit.unit() == RateLimitResponseUnit::SECOND ? second_commands : main_commands;
       };
       auto execute = [&] {
         redis->pipeline(main_commands);
@@ -323,22 +325,27 @@ struct Service::Impl {
         results[i] = negative[i] ? (before > hits[i] ? before-hits[i] : 0) : before+hits[i];
       }
     }
-    std::vector<GrpcRateLimitDescriptorStatus> statuses(count);
+    std::vector<RateLimitDescriptorStatus> statuses(count);
 
     std::vector<MemcacheUpdate> updates;
     for (size_t i = 0; i < count; ++i) {
       auto& status = statuses[i]; 
-      status.set_code(static_cast<GrpcRateLimitResponse::Code>(OK));
+      status.set_code(OK);
 
       if (keys[i].empty()) continue;
       const auto& limit = *limits[i];
-      *status.mutable_current_limit() = grpc_conversion::ToProto(limit.limit);
-      status.mutable_duration_until_reset()->set_seconds(reset(limit.limit.unit(), calendar));
+      status.set_current_limit(limit.limit);
+      rlc::RateLimitResponse::Duration dur(
+	reset(limit.limit.unit(), calendar),
+	0
+      );
+      status.set_duration_until_reset(dur);
+
       const uint64_t threshold = limit.limit.requests_per_unit();
       if (negative[i]) {
         status.set_limit_remaining(threshold > results[i] ? threshold-results[i] : 0);
       } else if (local_over[i] || results[i] > threshold) {
-        if (!limit.shadow) status.set_code(static_cast<GrpcRateLimitResponse::Code>(OVER));
+        if (!limit.shadow) status.set_code(OVER);
         if (!local_over[i]) cache(keys[i], limit.limit.unit());
       } else status.set_limit_remaining(threshold-results[i]);
 
@@ -456,7 +463,7 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
 
     const auto statuses = impl_->limit(*request, limits);
     uint32_t min_remaining = std::numeric_limits<uint32_t>::max();
-    const GrpcRateLimitDescriptorStatus* minimum = nullptr;
+    const RateLimitDescriptorStatus* minimum = nullptr;
     std::vector<int> passed;
     std::unordered_map<std::string, bool> quota_groups;
     std::vector<std::string> descriptor_groups(count);
@@ -477,10 +484,10 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
 	output.set_limit_remaining(std::numeric_limits<uint32_t>::max()); 
 	continue; 
       }
-      output = grpc_conversion::FromProto(status);
+      output = status;
 
       const bool is_quota = settings.quota || (limits[i] && limits[i]->quota);
-      const bool over = status.code() == static_cast<pb::RateLimitResponse::Code>(OVER);
+      const bool over = status.code() == OVER;
       if (!over) passed.push_back(i);
       if (is_quota) {
         const auto key = groupKey(grpc_conversion::ToProto(request->descriptors(i)));
@@ -504,15 +511,15 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
     };
 
     if (settings.per_unit_headers) {
-      std::vector<ResponseUnit> units;
-      std::unordered_map<ResponseUnit, const GrpcRateLimitDescriptorStatus*> closest;
+      std::vector<RateLimitResponseUnit> units;
+      std::unordered_map<RateLimitResponseUnit, const RateLimitDescriptorStatus*> closest;
       for (const auto& status : statuses) if (status.has_current_limit()) {
-        const auto unit = static_cast<ResponseUnit>(status.current_limit().unit());
+        const auto unit = static_cast<RateLimitResponseUnit>(status.current_limit().unit());
         const auto found = closest.find(unit);
         if (found == closest.end()) units.push_back(unit);
         if (found == closest.end() || status.limit_remaining() < found->second->limit_remaining()) closest[unit] = &status;
       }
-      for (ResponseUnit unit : units) {
+      for (RateLimitResponseUnit unit : units) {
         const auto* status = closest[unit];
 
         std::string suffix = rlc::to_string(unit);
@@ -540,7 +547,7 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
     ) {
       add_header(headers, limit, std::to_string(minimum->current_limit().requests_per_unit()));
       add_header(headers, remaining, std::to_string(minimum->limit_remaining()));
-      add_header(headers, reset_name, std::to_string(reset(static_cast<ResponseUnit>(minimum->current_limit().unit()), settings.calendar)));
+      add_header(headers, reset_name, std::to_string(reset(static_cast<RateLimitResponseUnit>(minimum->current_limit().unit()), settings.calendar)));
     };
 
     if (settings.headers && minimum) {
