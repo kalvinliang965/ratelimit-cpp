@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "common.h"
+#include <functional>
 
 namespace rlc {
 namespace {
@@ -530,35 +531,45 @@ RateLimitStatus Service::ShouldRateLimit(const RateLimitRequest* request, RateLi
         for (size_t i = 1; i < suffix.size(); ++i) suffix[i] = std::tolower(static_cast<unsigned char>(suffix[i]));
         suffix += "s";
 
-	auto& header = response->add_response_header();
-
+	auto& header1 = response->add_response_header();
         add_header(
-		header,
+		header1,
 		"RateLimit-Limit-"+suffix, 
 		std::to_string(status->current_limit().requests_per_unit())
 	);
+	auto& header2 = response->add_response_header();
         add_header(
-		header,
+		header2,
 		"RateLimit-Remaining-"+suffix, 
 		std::to_string(status->limit_remaining())
 	);
       }
     }
     auto add_standard_headers = [&](
-			auto& headers, const std::string& limit, 
-			const std::string& remaining, const std::string& reset_name
+    	auto get_header, const std::string& limit, 
+	const std::string& remaining, const std::string& reset_name
     ) {
-      add_header(headers, limit, std::to_string(minimum->current_limit().requests_per_unit()));
-      add_header(headers, remaining, std::to_string(minimum->limit_remaining()));
-      add_header(headers, reset_name, std::to_string(reset(static_cast<RateLimitResponseUnit>(minimum->current_limit().unit()), settings.calendar)));
+      auto& header1 = get_header();
+      add_header(header1, limit, std::to_string(minimum->current_limit().requests_per_unit()));
+
+      auto& header2 = get_header();
+      add_header(header2, remaining, std::to_string(minimum->limit_remaining()));
+
+      auto& header3 = get_header();
+      add_header(header3, reset_name, std::to_string(reset(static_cast<RateLimitResponseUnit>(minimum->current_limit().unit()), settings.calendar)));
     };
 
     if (settings.headers && minimum) {
-	add_standard_headers(response->add_response_header(), settings.limit_header, settings.remaining_header, settings.reset_header);
+	add_standard_headers(
+		[&]() -> RateLimitResponse::HeaderValue& { return response->add_response_header();}, 
+		settings.limit_header, settings.remaining_header, settings.reset_header
+	);
     }
 
     if (settings.request_headers && minimum) {
-	add_standard_headers(response->add_request_header(), settings.request_limit_header, settings.request_remaining_header, settings.request_reset_header);
+	add_standard_headers(
+		[&]() -> RateLimitResponse::HeaderValue& { return response->add_request_header(); },
+		settings.request_limit_header, settings.request_remaining_header, settings.request_reset_header);
     }
 
     if (final_code == OVER && settings.shadow) {
