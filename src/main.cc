@@ -1,4 +1,5 @@
 #include "service.h"
+#include "runtime.h"
 #include "health_service.h"
 #include "raw_grpc.h"
 #include "tls_proxy.h"
@@ -150,60 +151,6 @@ int64_t durationMillis(std::string value) {
   }
   return static_cast<int64_t>(result);
 }
-using Documents = std::vector<std::pair<std::string, std::string>>;
-Documents documents(const fs::path& path) {
-  Documents result;
-  if (fs::is_regular_file(path)) return {{path.filename().string(),readFile(path.string())}};
-  if (!fs::exists(path)) throw std::runtime_error("config directory does not exist: " + path.string());
-  const bool ignore = envBool("RUNTIME_IGNOREDOTFILES");
-  fs::recursive_directory_iterator it(path, fs::directory_options::follow_directory_symlink), end;
-  for (; it != end; ++it) {
-    if (ignore && it->path().filename().string().front() == '.') {
-      if (it->is_directory()) it.disable_recursion_pending();
-      continue;
-    }
-    if (it->is_regular_file()) {
-      auto name = fs::relative(it->path(),path).string();
-      std::replace(name.begin(),name.end(),'/','.');
-      result.emplace_back(name,readFile(it->path().string()));
-    }
-  }
-  std::sort(result.begin(),result.end());
-  return result;
-}
-
-// File updates replace one immutable snapshot. Invalid updates retain the last
-// good configuration, so readers never see partially parsed policies.
-class FileProvider {
- public:
-  FileProvider(Service& service, fs::path path) : service_(service),path_(std::move(path)) { reload(); }
-  ~FileProvider() { stop_ = true; if (worker_.joinable()) worker_.join(); }
-  void start() { worker_ = std::thread([this] {
-    while (!stop_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      try { reload(); } catch (const std::exception& e) { std::cerr << "config: " << e.what() << '\n'; }
-    }
-  }); }
- private:
-  void reload() {
-    auto next = documents(path_);
-    if (seen_ && next == previous_) return;
-    previous_ = next; seen_ = true;
-    try {
-      service_.setConfig(Config::load(next,envBool("MERGE_DOMAIN_CONFIG")));
-      service_.recordConfigLoad(true);
-    } catch (const std::exception& e) {
-      service_.recordConfigLoad(false);
-      std::cerr << "configuration rejected: " << e.what() << '\n';
-    }
-  }
-  Service& service_; 
-  fs::path path_; 
-  Documents previous_; 
-  bool seen_ = false; 
-  std::atomic<bool> stop_{false}; std::thread worker_;
-};
-
 class HttpServer {
  public:
   using Handler = std::function<void(const http::request<http::string_body>&,http::response<http::string_body>&)>;
@@ -370,7 +317,6 @@ void run_grpc_client(Options& opts) {
 
 void run_grpc_server(
 	Service& service,
-	Options& opts,
 	std::function<bool()> healthy
 ) {
 	const auto grpc_uds=env("GRPC_UDS"); // client socket
@@ -450,45 +396,18 @@ void run_grpc_server(
 	if(tls_proxy_upstream) tls_proxy_upstream->cleanup();
 }
 
-void run_server(Options& opts) {
-	Service service;
-	std::unique_ptr<FileProvider> files;
-	// std::unique_ptr<XdsProvider> xds;
-	auto type = env("CONFIG_TYPE", "FILE");
-	if (type == "FILE") {
-		// FileProvider constantly poll if data has change and update
-		// config inside service.
-		files = std::make_unique<FileProvider>(service, opts.config_path);
-		files->start();
-	} else if (type == "GRPC_XDS_SOTW") {
-		// TODO: receive configuration from remote xds server
-		// xds=std::make_unique_ptr<XdsProvider>(service);
-		// xds->start();
-	} else {
-		throw std::runtime_error("invalid CONFIG_TYPE: " + type);
-	}
-	// TODO: ???? 
-	if (quit) return;
+// This executable hosts the gRPC frontend. The DPO executable can create
+// its own RateLimitRuntime and run its own frontend against runtime.service().
+void run_grpc_application(const Options& opts) {
+    RateLimitRuntime runtime(opts.config_path);
+    runtime.start();
+    if (quit) return;
 
-	auto healthy=[&]() {
-		auto config = service.getConfig();
-		return !quit && service.backendHealthy() &&
-			(
-				!envBool("HEALTHY_WITH_AT_LEAST_ONE_CONFIG_LOADED") || 
-				(config && !config->empty())
-			);
-	};
-	const std::string rpc_transport = env("RPC_TRANSPORT", "GRPC");
-	if (rpc_transport == "GRPC") {
-		run_grpc_server(service, opts, healthy);
-	} else if (rpc_transport == "XRPC") {
-		std::cout << "TODO" << std::endl;
-		return;
-	} else {
-		throw std::runtime_error("invalid rpc_transport: " + rpc_transport);
-	}
-	// if(xds) xds->stop();
-	return;
+    run_grpc_server(runtime.service(), [&]() {
+        return !quit && runtime.healthy();
+    });
+    // The gRPC frontend has stopped before the runtime joins background work.
+    runtime.stop();
 }
 
 void dispatch(Options& opts) {
@@ -502,7 +421,7 @@ void dispatch(Options& opts) {
 		return;
 	}
 	case Command::CHECKCONFIG: {
-	      	auto config = Config::load(documents(opts.config_path),envBool("MERGE_DOMAIN_CONFIG")); 
+	      	auto config = Config::load(readConfigDocuments(opts.config_path),envBool("MERGE_DOMAIN_CONFIG")); 
 		std::cout<<config->dump()<<"all rate limit configs ok\n";
 		return;
 	} 
@@ -512,7 +431,7 @@ void dispatch(Options& opts) {
 	}
 	case Command::SERVER:
 	default:
-		run_server(opts);
+		run_grpc_application(opts);
 		return;
 	}
 }
