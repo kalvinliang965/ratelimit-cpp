@@ -35,8 +35,10 @@ struct RateLimitResponse {
         Unit unit_ = Unit::UNKNOWN;
 
         const std::string& name() const { return name_; }
+
         uint32_t requests_per_unit() const { return requests_per_unit_; }
         Unit unit() const { return unit_; }
+	
 
         void set_name(std::string name) { name_ = std::move(name); }
         void set_requests_per_unit(uint32_t value) { requests_per_unit_ = value; }
@@ -72,7 +74,7 @@ struct RateLimitResponse {
 		return current_limit_.value();
 	}
 
-uint32_t limit_remaining() const {
+	uint32_t limit_remaining() const {
 		return limit_remaining_;
 	}
 

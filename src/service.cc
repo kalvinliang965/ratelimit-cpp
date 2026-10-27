@@ -99,6 +99,7 @@ void mergeMetadata(nlohmann::json& destination, const nlohmann::json& source) {
     }
   }
 }
+
 std::string overrideString(const RateLimitDescriptor& descriptor) {
   const auto& limit = descriptor.limit();
   std::string value;
@@ -109,6 +110,7 @@ std::string overrideString(const RateLimitDescriptor& descriptor) {
   }
   return value;
 }
+
 nlohmann::json metadataFor(const RateLimitRequest& request, const std::vector<int>& passed,
                            const std::vector<std::optional<Limit>>& limits, bool quota) {
   nlohmann::json out = nlohmann::json::object();
