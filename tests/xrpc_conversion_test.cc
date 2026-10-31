@@ -5,7 +5,19 @@
 #include <limits>
 #include <stdexcept>
 
-namespace wire = xrpc_conversion;
+// This test models a 1,500-byte packet with a 34-byte DPO header.
+namespace wire {
+using namespace xrpc_conversion;
+constexpr size_t kHeaderSize = 34;
+constexpr size_t kMaxPacketBytes = 1500;
+constexpr size_t kMaxPayloadBytes = kMaxPacketBytes - kHeaderSize;
+inline Bytes encode_request(const rlc::RateLimitRequest& value) { return xrpc_conversion::encode_request(value, kMaxPayloadBytes); }
+inline rlc::RateLimitRequest decode_request(const uint8_t* data, size_t size) { return xrpc_conversion::decode_request(data, size, kMaxPayloadBytes); }
+inline Bytes encode_statuses(const Statuses& value) { return xrpc_conversion::encode_statuses(value, kMaxPayloadBytes); }
+inline Statuses decode_statuses(const uint8_t* data, size_t size) { return xrpc_conversion::decode_statuses(data, size, kMaxPayloadBytes); }
+inline Bytes encode_response(const rlc::RateLimitResponse& value) { return xrpc_conversion::encode_response(value, kMaxPayloadBytes); }
+inline rlc::RateLimitResponse decode_response(const uint8_t* data, size_t size, rlc::RateLimitResponse::Code code) { return xrpc_conversion::decode_response(data, size, code, kMaxPayloadBytes); }
+} // namespace wire
 using Response = rlc::RateLimitResponse;
 static void check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -172,7 +184,7 @@ static void full_response_tests() {
     rejects([&] { wire::encode_response(response); });
 }
 
-// Test application payloads only. The 35-byte DPO header is added separately.
+// Test application payloads only. The 34-byte DPO header is added separately.
 static void small_packet_round_trip_test() {
     // A small request with one descriptor and one entry.
     rlc::RateLimitRequest small;
@@ -215,7 +227,7 @@ static void small_packet_round_trip_test() {
 }
 
 static void large_packet_round_trip_test() {
-    // Three entries fill the request payload exactly to 1,465 bytes.
+    // Three entries fill the request payload exactly to 1,466 bytes.
     // Each string length still fits in one byte.
     rlc::RateLimitRequest large;
     large.domain_ = "d";
@@ -223,7 +235,7 @@ static void large_packet_round_trip_test() {
     auto& entries = large.descriptors_.emplace_back().entries_;
     entries.emplace_back(std::string(255, 'a'), std::string(255, 'b'));
     entries.emplace_back(std::string(255, 'c'), std::string(255, 'd'));
-    entries.emplace_back(std::string(255, 'e'), std::string(175, 'f'));
+    entries.emplace_back(std::string(255, 'e'), std::string(176, 'f'));
     auto bytes = wire::encode_request(large);
     check(bytes.size() == wire::kMaxPayloadBytes, "exact maximum request payload size");
     auto decoded_request = wire::decode_request(bytes.data(), bytes.size());
@@ -278,6 +290,39 @@ static void large_packet_round_trip_test() {
 
 }
 
+static void caller_payload_limit_test() {
+    rlc::RateLimitRequest request;
+    request.domain_ = "m";
+    request.descriptors_.emplace_back().entries_.emplace_back("k", "v");
+    const auto bytes = xrpc_conversion::encode_request(request, 13);
+    check(bytes.size() == 13, "request fits exactly into caller limit");
+    check(xrpc_conversion::decode_request(bytes.data(), bytes.size(), 13).domain_ == "m",
+          "request decodes at caller limit");
+    rejects([&] { xrpc_conversion::encode_request(request, 12); });
+    rejects([&] { xrpc_conversion::decode_request(bytes.data(), bytes.size(), 12); });
+    rejects([&] { xrpc_conversion::encode_request(request, 0); });
+    rejects([&] { xrpc_conversion::decode_request(bytes.data(), bytes.size(), 0); });
+
+    Response response;
+    response.overall_code_ = Response::Code::OK;
+    response.raw_body_ = std::string(2048, 'x');
+    const auto response_bytes = xrpc_conversion::encode_response(response, 4096);
+    check(response_bytes.size() == 2054, "larger caller limit allows larger payload");
+    check(xrpc_conversion::decode_response(response_bytes.data(), response_bytes.size(),
+                                           Response::Code::OK, 4096).raw_body_ == response.raw_body_,
+          "large payload round trip with larger caller limit");
+    rejects([&] { xrpc_conversion::encode_response(response, 1466); });
+    rejects([&] { xrpc_conversion::decode_response(response_bytes.data(), response_bytes.size(),
+                                                   Response::Code::OK, 1466); });
+
+    wire::Statuses statuses(1);
+    const auto status_bytes = xrpc_conversion::encode_statuses(statuses, 7);
+    check(xrpc_conversion::decode_statuses(status_bytes.data(), status_bytes.size(), 7).size() == 1,
+          "status list fits caller limit");
+    rejects([&] { xrpc_conversion::encode_statuses(statuses, 6); });
+    rejects([&] { xrpc_conversion::decode_statuses(status_bytes.data(), status_bytes.size(), 6); });
+}
+
 static bool run_round_trip_test(const char* name, const std::function<void()>& test) {
     try {
         test();
@@ -293,7 +338,8 @@ int main() {
     // Run both size cases independently, so either failure identifies its case.
     const bool small_passed = run_round_trip_test("small packet round trip", small_packet_round_trip_test);
     const bool large_passed = run_round_trip_test("large packet round trip", large_packet_round_trip_test);
-    if (!small_passed || !large_passed) return 1;
+    const bool limits_passed = run_round_trip_test("caller payload limits", caller_payload_limit_test);
+    if (!small_passed || !large_passed || !limits_passed) return 1;
 
     try {
         rlc::RateLimitRequest request;

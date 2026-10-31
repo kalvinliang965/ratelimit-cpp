@@ -25,12 +25,13 @@ header values; the codec itself supports arbitrary bytes.
 
 The response's `overall_code` belongs in the DPO header rather than the
 payload. The demo passes it separately to `decode_response`, just as a DPO
-handler must do. The 1,500-byte budget is for the DPO header and payload, not
-the network MTU.
+handler must do. Callers pass the maximum payload size to each codec function. The
+DPO caller subtracts its header size from its packet buffer budget; that budget
+is separate from the network MTU.
 
-Fields must fit their wire length/count types and the aggregate payload budget.
-The existing DPO codec enforces stricter limits for some inputs. Check
-interoperability before using this codec in place of the DPO codec.
+Fields must fit their wire length/count types and the caller-provided payload budget.
+The DPO application and its client must use limits that fit their packet
+buffers and agree on the payload format.
 
 For linking from another C++ program, `make build/libxrpc_conversion.a` builds
 a standalone static library. Include `xrpc_conversion.h` and link that library.

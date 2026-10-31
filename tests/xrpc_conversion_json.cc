@@ -13,6 +13,8 @@
 
 namespace {
 
+// Example budget; a transport should calculate its own limit.
+constexpr size_t kMaxPayload = 1500 - 34;
 using Request = rlc::RateLimitRequest;
 using Entry = rlc::RateLimitDescriptor::Entry;
 using Unit = rlc::RateLimitUnit;
@@ -373,18 +375,18 @@ int main(int argc, char** argv) {
             WriteAndCompare("build/ratelimit_wire_output/response_native.json", document, native_json);
 
             // Phase 2: C++ response -> payload bytes -> C++ response -> JSON.
-            const auto bytes = xrpc_conversion::encode_response(response);
+            const auto bytes = xrpc_conversion::encode_response(response, kMaxPayload);
             // In the real client, this code comes from the fixed DPO header.
             const auto decoded = xrpc_conversion::decode_response(
-                bytes.data(), bytes.size(), response.overall_code_);
+                bytes.data(), bytes.size(), response.overall_code_, kMaxPayload);
             WriteResponseToJson(decoded_json, decoded);
             byte_count = bytes.size();
         } else {
             const auto request = MakeRequestFromJson(document);
             WriteRequestToJson(native_json, request);
             WriteAndCompare("build/ratelimit_wire_output/request_native.json", document, native_json);
-            const auto bytes = xrpc_conversion::encode_request(request);
-            const auto decoded = xrpc_conversion::decode_request(bytes.data(), bytes.size());
+            const auto bytes = xrpc_conversion::encode_request(request, kMaxPayload);
+            const auto decoded = xrpc_conversion::decode_request(bytes.data(), bytes.size(), kMaxPayload);
             WriteRequestToJson(decoded_json, decoded);
             byte_count = bytes.size();
         }

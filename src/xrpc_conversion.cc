@@ -21,9 +21,10 @@ using Response = rlc::RateLimitResponse;
 class BufferWriter {
 private:
     Bytes buffer_;
+    size_t max_payload_;
 
     void require_space(size_t count) const {
-        if (count > kMaxPayloadBytes - buffer_.size()) {
+        if (count > max_payload_ - buffer_.size()) {
             throw std::runtime_error("BufferWriter: payload is too large");
         }
     }
@@ -37,6 +38,8 @@ private:
     }
 
 public:
+    explicit BufferWriter(size_t max_payload) : max_payload_(max_payload) {}
+
     void write_u8(uint8_t value) { write_little_endian(value, 1); }
     void write_u16(uint16_t value) { write_little_endian(value, 2); }
     void write_u32(uint32_t value) { write_little_endian(value, 4); }
@@ -87,11 +90,11 @@ private:
     }
 
 public:
-    BufferReader(const uint8_t* data, size_t size) : data_(data), size_(size) {
+    BufferReader(const uint8_t* data, size_t size, size_t max_payload) : data_(data), size_(size) {
         if (data == nullptr && size != 0) {
             throw std::runtime_error("BufferReader: null data with nonzero size");
         }
-        if (size > kMaxPayloadBytes) {
+        if (size > max_payload) {
             throw std::runtime_error("BufferReader: payload is too large");
         }
     }
@@ -159,8 +162,8 @@ enum class DescriptorFlag : uint8_t {
 	IS_NEGATIVE_HITS = 1 << 2
 };
 
-Bytes encode_request(const Request& request) {
-    BufferWriter writer;
+Bytes encode_request(const Request& request, size_t max_payload) {
+    BufferWriter writer(max_payload);
     writer.write_string(request.domain());
     writer.write_u32(request.hits_addend());
 
@@ -199,8 +202,8 @@ Bytes encode_request(const Request& request) {
     return writer.release();
 }
 
-Request decode_request(const uint8_t* data, size_t size) {
-    BufferReader reader(data, size);
+Request decode_request(const uint8_t* data, size_t size, size_t max_payload) {
+    BufferReader reader(data, size, max_payload);
     Request request;
     request.domain_ = reader.read_string();
     request.hits_addend_ = reader.read_u32();
@@ -404,21 +407,21 @@ enum class ResponseFlag : uint8_t {
 	HAS_QUOTA = 1 << 1 // 2
 };
 
-Bytes encode_statuses(const Statuses& statuses) {
-    BufferWriter out;
+Bytes encode_statuses(const Statuses& statuses, size_t max_payload) {
+    BufferWriter out(max_payload);
     write_statuses(out, statuses);
     return out.release();
 }
-Statuses decode_statuses(const uint8_t* data, size_t size) {
-    BufferReader in(data, size);
+Statuses decode_statuses(const uint8_t* data, size_t size, size_t max_payload) {
+    BufferReader in(data, size, max_payload);
     auto statuses = read_statuses(in);
     in.require_finished();
     return statuses;
 }
 
-Bytes encode_response(const Response& response) {
+Bytes encode_response(const Response& response, size_t max_payload) {
     require(static_cast<uint32_t>(response.overall_code_) <= 2, "invalid overall code");
-    BufferWriter out;
+    BufferWriter out(max_payload);
     write_statuses(out, response.statuses_);
 
     uint8_t flags = 0;
@@ -434,9 +437,9 @@ Bytes encode_response(const Response& response) {
     if (response.quota_) write_quota(out, *response.quota_);
     return out.release();
 }
-Response decode_response(const uint8_t* data, size_t size, Response::Code overall_code) {
+Response decode_response(const uint8_t* data, size_t size, Response::Code overall_code, size_t max_payload) {
     require(static_cast<uint32_t>(overall_code) <= 2, "invalid overall code");
-    BufferReader in(data, size);
+    BufferReader in(data, size, max_payload);
     Response response;
     response.set_overall_code(overall_code);
     response.statuses_ = read_statuses(in);
