@@ -28,10 +28,9 @@ payload. The demo passes it separately to `decode_response`, just as a DPO
 handler must do. The 1,500-byte budget is for the DPO header and payload, not
 the network MTU.
 
-Recommended size constants are not hard limits: fields must fit their wire
-length/count types and the aggregate payload budget. The existing DPO codec
-enforces stricter limits for some inputs. Check interoperability before using
-this codec in place of the DPO codec.
+Fields must fit their wire length/count types and the aggregate payload budget.
+The existing DPO codec enforces stricter limits for some inputs. Check
+interoperability before using this codec in place of the DPO codec.
 
 For linking from another C++ program, `make build/libxrpc_conversion.a` builds
 a standalone static library. Include `xrpc_conversion.h` and link that library.

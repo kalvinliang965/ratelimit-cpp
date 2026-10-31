@@ -24,12 +24,6 @@ constexpr size_t kHeaderSize = 35;
 constexpr size_t kMaxPacketBytes = 1500;
 constexpr size_t kMaxPayloadBytes = kMaxPacketBytes - kHeaderSize;
 
-// recommanded limit
-constexpr size_t kRecommandDescriptors = 5;
-constexpr size_t kRecommandEntries = 10;
-constexpr size_t kRecommandStringBytes = 64;
-constexpr size_t kRecommandHeaders = 16; 
-constexpr size_t kRecommandMetadataDepth = 32;
 constexpr size_t kEmptyResponseSize = 6;
 
 using Bytes = std::vector<uint8_t>;

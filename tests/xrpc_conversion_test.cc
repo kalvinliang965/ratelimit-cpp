@@ -24,6 +24,7 @@ static wire::Bytes metadata_payload(const std::string& json) {
 }
 
 static void full_response_tests() {
+    constexpr size_t kExampleHeaderCount = 16;
     Response empty;
     const wire::Bytes empty_bytes(6, 0);
     check(wire::encode_response(empty) == empty_bytes, "empty full-response golden bytes");
@@ -100,7 +101,7 @@ static void full_response_tests() {
 
     for (size_t offset : {size_t(1), size_t(2), size_t(3)}) {
         bytes = empty_bytes;
-        bytes[offset] = offset == 1 ? 4 : static_cast<uint8_t>(wire::kRecommandHeaders + 1);
+        bytes[offset] = offset == 1 ? 4 : static_cast<uint8_t>(kExampleHeaderCount + 1);
         rejects([&] { wire::decode_response(bytes.data(), bytes.size(), Response::Code::OK); });
     }
     bytes = {0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
@@ -130,11 +131,11 @@ static void full_response_tests() {
     rejects([&] { wire::encode_response(response); });
     nlohmann::json deep = nlohmann::json::object();
     for (int i = 0; i < 40; ++i) deep = nlohmann::json{{"child", std::move(deep)}};
-    // Depth is a recommendation in this practice codec, not a wire constraint.
+    // Nested metadata is limited by the payload budget.
     response.dynamic_metadata_ = deep;
     bytes = wire::encode_response(response);
     decoded = wire::decode_response(bytes.data(), bytes.size(), Response::Code::OK);
-    check(decoded.dynamic_metadata_ == deep, "metadata beyond recommended depth");
+    check(decoded.dynamic_metadata_ == deep, "nested metadata round-trip");
 
     // Boundary of the aggregate payload budget, not a blanket 64-byte blob cap.
     response = Response{};
@@ -148,19 +149,19 @@ static void full_response_tests() {
     bytes.push_back('x');
     rejects([&] { wire::decode_response(bytes.data(), bytes.size(), Response::Code::OK); });
     response = Response{};
-    response.response_headers_to_add_.resize(wire::kRecommandHeaders);
-    response.request_headers_to_add_.resize(wire::kRecommandHeaders);
+    response.response_headers_to_add_.resize(kExampleHeaderCount);
+    response.request_headers_to_add_.resize(kExampleHeaderCount);
     bytes = wire::encode_response(response);
     decoded = wire::decode_response(bytes.data(), bytes.size(), Response::Code::OK);
-    check(decoded.response_headers_to_add_.size() == wire::kRecommandHeaders &&
-          decoded.request_headers_to_add_.size() == wire::kRecommandHeaders, "maximum header list counts");
+    check(decoded.response_headers_to_add_.size() == kExampleHeaderCount &&
+          decoded.request_headers_to_add_.size() == kExampleHeaderCount, "example header list counts");
     response.response_headers_to_add_.emplace_back();
     response.request_headers_to_add_.emplace_back();
     bytes = wire::encode_response(response);
     decoded = wire::decode_response(bytes.data(), bytes.size(), Response::Code::OK);
-    check(decoded.response_headers_to_add_.size() == wire::kRecommandHeaders + 1 &&
-          decoded.request_headers_to_add_.size() == wire::kRecommandHeaders + 1,
-          "header recommendation is not a hard limit");
+    check(decoded.response_headers_to_add_.size() == kExampleHeaderCount + 1 &&
+          decoded.request_headers_to_add_.size() == kExampleHeaderCount + 1,
+          "larger header lists round-trip");
     response.response_headers_to_add_.resize(256);
     rejects([&] { wire::encode_response(response); });
     response.response_headers_to_add_.clear();
@@ -169,6 +170,111 @@ static void full_response_tests() {
     response = Response{};
     response.dynamic_metadata_ = nlohmann::json{{"large", std::string(wire::kMaxPayloadBytes, 'x')}};
     rejects([&] { wire::encode_response(response); });
+}
+
+// Test application payloads only. The 35-byte DPO header is added separately.
+static void packet_size_round_trip_tests() {
+    // A small request with one descriptor and one entry.
+    rlc::RateLimitRequest small;
+    small.domain_ = "m";
+    small.hits_addend_ = 0;
+    small.descriptors_.emplace_back().entries_.emplace_back("k", "v");
+    const wire::Bytes small_request_expected = {
+        1, 'm', 0, 0, 0, 0, 1, 1, 0, 1, 'k', 1, 'v'
+    };
+    auto bytes = wire::encode_request(small);
+    check(bytes == small_request_expected, "small request wire bytes");
+    auto decoded_request = wire::decode_request(bytes.data(), bytes.size());
+    check(decoded_request.domain_ == "m" && decoded_request.hits_addend_ == 0 &&
+          decoded_request.descriptors_.size() == 1 &&
+          decoded_request.descriptors_[0].entries_.size() == 1 &&
+          decoded_request.descriptors_[0].entries_[0].key_ == "k" &&
+          decoded_request.descriptors_[0].entries_[0].value_ == "v",
+          "small request round trip");
+
+    // A small response: overall_code is supplied separately by the DPO header.
+    Response small_response;
+    small_response.overall_code_ = Response::Code::OK;
+    auto& small_status = small_response.statuses_.emplace_back();
+    small_status.set_code(Response::Code::OK);
+    small_status.set_limit_remaining(4);
+    const wire::Bytes small_response_expected = {
+        1, 1, 4, 0, 0, 0, 0, // one status: code, remaining, flags
+        0, 0, 0, 0, 0       // response flags, header counts, empty body length
+    };
+    bytes = wire::encode_response(small_response);
+    check(bytes == small_response_expected, "small response wire bytes");
+    auto decoded_response = wire::decode_response(bytes.data(), bytes.size(),
+                                                 small_response.overall_code_);
+    check(decoded_response.overall_code_ == Response::Code::OK &&
+          decoded_response.statuses_.size() == 1 &&
+          decoded_response.statuses_[0].code() == Response::Code::OK &&
+          decoded_response.statuses_[0].limit_remaining() == 4,
+          "small response round trip");
+
+    // Three entries fill the request payload exactly to 1,465 bytes.
+    // Each string length still fits in one byte.
+    rlc::RateLimitRequest large;
+    large.domain_ = "d";
+    large.hits_addend_ = 0x12345678;
+    auto& entries = large.descriptors_.emplace_back().entries_;
+    entries.emplace_back(std::string(255, 'a'), std::string(255, 'b'));
+    entries.emplace_back(std::string(255, 'c'), std::string(255, 'd'));
+    entries.emplace_back(std::string(255, 'e'), std::string(175, 'f'));
+    bytes = wire::encode_request(large);
+    check(bytes.size() == wire::kMaxPayloadBytes, "exact maximum request payload size");
+    decoded_request = wire::decode_request(bytes.data(), bytes.size());
+    check(decoded_request.domain_ == large.domain_ &&
+          decoded_request.hits_addend_ == large.hits_addend_ &&
+          decoded_request.descriptors_.size() == 1 &&
+          decoded_request.descriptors_[0].entries_.size() == entries.size(),
+          "large request fields");
+    for (size_t i = 0; i < entries.size(); ++i) {
+        check(decoded_request.descriptors_[0].entries_[i].key_ == entries[i].key_ &&
+              decoded_request.descriptors_[0].entries_[i].value_ == entries[i].value_,
+              "large request entry contents");
+    }
+    check(wire::encode_request(decoded_request) == bytes, "large request re-encodes identically");
+    entries.back().value_.push_back('f');
+    rejects([&] { wire::encode_request(large); });
+    bytes.push_back(0);
+    rejects([&] { wire::decode_request(bytes.data(), bytes.size()); });
+
+    // Fill a realistic response (status, header, metadata and binary body) to
+    // the same boundary. The six-byte empty-response check is covered above.
+    Response large_response;
+    large_response.overall_code_ = Response::Code::OVER_LIMIT;
+    auto& status = large_response.statuses_.emplace_back();
+    status.set_code(Response::Code::OVER_LIMIT);
+    status.set_limit_remaining(7);
+    large_response.response_headers_to_add_.push_back({"x-limit", "5", ""});
+    large_response.dynamic_metadata_ = nlohmann::json{{"reason", "quota"}};
+    const auto overhead = wire::encode_response(large_response).size();
+    check(overhead < wire::kMaxPayloadBytes, "large response has room for body");
+    large_response.raw_body_.resize(wire::kMaxPayloadBytes - overhead);
+    for (size_t i = 0; i < large_response.raw_body_.size(); ++i)
+        large_response.raw_body_[i] = static_cast<char>(i % 128);
+    bytes = wire::encode_response(large_response);
+    check(bytes.size() == wire::kMaxPayloadBytes, "exact maximum response payload size");
+    decoded_response = wire::decode_response(bytes.data(), bytes.size(), large_response.overall_code_);
+    check(decoded_response.overall_code_ == large_response.overall_code_ &&
+          decoded_response.statuses_.size() == 1 &&
+          decoded_response.statuses_[0].code() == Response::Code::OVER_LIMIT &&
+          decoded_response.statuses_[0].limit_remaining() == 7 &&
+          decoded_response.response_headers_to_add_.size() == 1 &&
+          decoded_response.response_headers_to_add_[0].key_ == "x-limit" &&
+          decoded_response.response_headers_to_add_[0].value_ == "5" &&
+          decoded_response.dynamic_metadata_ == large_response.dynamic_metadata_ &&
+          decoded_response.raw_body_ == large_response.raw_body_,
+          "large response round trip");
+    check(wire::encode_response(decoded_response) == bytes, "large response re-encodes identically");
+    large_response.raw_body_.push_back('x');
+    rejects([&] { wire::encode_response(large_response); });
+    bytes.push_back(0);
+    rejects([&] { wire::decode_response(bytes.data(), bytes.size(), Response::Code::OVER_LIMIT); });
+
+    std::cout << "PASS: small request (13 bytes), small response (12 bytes), "
+                 "and exact-limit request/response (1,465 bytes each)\n";
 }
 
 int main() {
@@ -223,11 +329,11 @@ int main() {
         request.descriptors_[0].entries_.push_back({"extra", "entry"});
         bytes = wire::encode_request(request);
         check(wire::decode_request(bytes.data(), bytes.size()).descriptors()[0].entries_size() == 3,
-              "entry recommendation is not a hard limit");
+              "three entries round-trip");
         request.descriptors_.resize(6);
         bytes = wire::encode_request(request);
         check(wire::decode_request(bytes.data(), bytes.size()).descriptors_size() == 6,
-              "descriptor recommendation is not a hard limit");
+              "six descriptors round-trip");
         request.descriptors_.resize(256);
         rejects([&] { wire::encode_request(request); });
 
@@ -270,7 +376,7 @@ int main() {
         check(result[4].quota_->valid_until_.has_value(), "present zero timestamp");
         bytes = wire::encode_statuses(wire::Statuses(6, full));
         check(wire::decode_statuses(bytes.data(), bytes.size()).size() == 6,
-              "status recommendation is not a hard limit");
+              "six statuses round-trip");
         rejects([&] { wire::encode_statuses(wire::Statuses(256, full)); });
         full.quota_->id_ = std::string(255, 'x');
         bytes = wire::encode_statuses({full});
@@ -282,6 +388,7 @@ int main() {
         rejects([&] { wire::decode_statuses(bytes.data(), bytes.size()); });
         rejects([&] { wire::decode_request(nullptr, 1); });
         full_response_tests();
+        packet_size_round_trip_tests();
         std::cout << "PASS: wire bytes, optional values, full response fields, JSON, quotas, bounds and malformed payloads\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
