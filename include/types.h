@@ -228,28 +228,37 @@ struct RateLimitDescriptor {
         const std::string& key() const { return key_; }
         std::string value_;
         const std::string& value() const { return value_; }
+	Entry (std::string key, std::string value)
+	    : key_(key), value_(value) {};
     };
+
     struct Override {
         uint32_t requests_per_unit_ = 0;
         uint32_t requests_per_unit() const { return requests_per_unit_; }
         RateLimitUnit unit_ = RateLimitUnit::UNKNOWN;
         RateLimitUnit unit() const { return unit_; }
+	Override() = default;
+	Override(uint32_t requests_per_unit, RateLimitUnit unit)
+        	: requests_per_unit_(requests_per_unit), unit_(unit) {}
     };
 
     std::vector<Entry> entries_;
     const std::vector<Entry>& entries() const { return entries_; }
     int entries_size() const { return static_cast<int>(entries_.size()); }
     const Entry& entries(int index) const { return entries_.at(index); }
+
     std::optional<Override> limit_;
     bool has_limit() const { return limit_.has_value(); }
     const Override& limit() const {
         static const Override default_limit{};
         return limit_ ? *limit_ : default_limit;
     }
+
     // Absence means use the request-level value; explicit zero is distinct.
     std::optional<uint64_t> hits_addend_;
     bool has_hits_addend() const { return hits_addend_.has_value(); }
     const std::optional<uint64_t>& hits_addend() const { return hits_addend_; }
+
     bool is_negative_hits_ = false;
     bool is_negative_hits() const { return is_negative_hits_; }
 };

@@ -1,0 +1,81 @@
+{
+  "overall_code": "OVER_LIMIT",
+  "statuses": [
+    {
+      "code": "OVER_LIMIT",
+      "limit_remaining": 0,
+      "current_limit": {
+        "name": "marketing-per-minute",
+        "requests_per_unit": 5,
+        "unit": "MINUTE"
+      },
+      "duration_until_reset": {
+        "seconds": 45,
+        "nanos": 123
+      },
+      "quota": {
+        "requests": 5,
+        "id": "marketing",
+        "valid_until": {
+          "seconds": 1800000000,
+          "nanos": 0
+        }
+      }
+    },
+    {
+      "code": "OK",
+      "limit_remaining": 4,
+      "current_limit": {
+        "name": "weekly",
+        "requests_per_unit": 10,
+        "unit": "WEEK"
+      }
+    },
+    {
+      "code": "UNKNOWN",
+      "limit_remaining": 0
+    }
+  ],
+  "response_headers_to_add": [
+    {
+      "key": "x-rate-limit",
+      "value": "5",
+      "raw_value": ""
+    },
+    {
+      "key": "x-rate-limit",
+      "value": "10",
+      "raw_value": ""
+    }
+  ],
+  "request_headers_to_add": [
+    {
+      "key": "x-policy",
+      "value": "messaging",
+      "raw_value": ""
+    }
+  ],
+  "raw_body": "Too many requests",
+  "dynamic_metadata": {
+    "policy": "marketing",
+    "limited": true,
+    "remaining": 0,
+    "ratio": 0.5,
+    "nested": {
+      "empty": {}
+    },
+    "tags": [
+      "sms",
+      null,
+      3
+    ]
+  },
+  "quota": {
+    "requests": 100,
+    "id": "account-quota",
+    "valid_until": {
+      "seconds": 1800000100,
+      "nanos": 500
+    }
+  }
+}

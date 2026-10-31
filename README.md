@@ -72,9 +72,15 @@ pooling, pipelining, timeouts, local over-limit cache, jitter, and
 `STOP_CACHE_KEY_INCREMENT_WHEN_OVERLIMIT`. Memcached is also supported with
 the Go-compatible asynchronous-update semantics.
 
+## Wire codec
+
+The rate-limit wire codec can be built and tested without starting Redis or
+gRPC. Run `make test-wire`; see [the wire codec guide](docs/ratelimit_wire.md)
+for the JSON fixtures, output files, and standalone library.
+
 ## Verify
 
-`make test` runs the policy unit tests and 20 live C++ Redis/gRPC scenarios.
+`make test` runs the wire codec checks, policy unit tests, and 20 live C++ Redis/gRPC scenarios.
 It needs `redis-server` and Python packages `grpcio` and `protobuf`.
 
 `make test-parity` also builds the adjacent Go reference and compares every

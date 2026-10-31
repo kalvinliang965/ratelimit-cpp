@@ -1,4 +1,5 @@
 CXX ?= c++
+AR ?= ar
 PROTOC ?= /usr/bin/protoc
 PYTHON ?= python3
 BUILD ?= build
@@ -43,11 +44,12 @@ ASAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=address,undefined
 TSAN_CXXFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=thread
 TSAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=thread
 
-.PHONY: all clean run test test-unit test-smoke test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
+.PHONY: all clean run test test-unit test-smoke test-wire test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
 all: $(BUILD)/ratelimit-cpp
 help:
 	@echo 'make [-j4]           Build the standalone C++ service'
-	@echo 'make test           Config unit tests and Redis/gRPC smoke tests'
+	@echo 'make test           Config, wire, and Redis/gRPC smoke tests'
+	@echo 'make test-wire      Standalone wire codec and JSON round-trip tests'
 	@echo 'make test-parity     Compare against ../ratelimit Go checkout (Go required)'
 	@echo 'make test-go-reference-vectors Run selected unmodified Go test fixtures through real C++/Go gRPC/Redis'
 	@echo 'make test-integration Run black-box Redis/gRPC/restart/failure parity checks'
@@ -83,6 +85,26 @@ $(BUILD)/obj/%.o: src/%.cc $(BUILD)/generated/.stamp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/ratelimit-cpp: $(OBJECTS) $(PROTO_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
+# The wire codec has no gRPC/Protobuf dependency and can be tested or linked
+# independently.  The main service also picks up src/xrpc_conversion.cc.
+$(BUILD)/obj/xrpc_conversion.o: src/xrpc_conversion.cc include/xrpc_conversion.h include/types.h
+	@mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/libxrpc_conversion.a: $(BUILD)/obj/xrpc_conversion.o
+	$(AR) rcs $@ $^
+
+$(BUILD)/xrpc-conversion-test: tests/xrpc_conversion_test.cc $(BUILD)/libxrpc_conversion.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+$(BUILD)/xrpc-conversion-json: tests/xrpc_conversion_json.cc $(BUILD)/libxrpc_conversion.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-conversion-json
+	$(BUILD)/xrpc-conversion-test
+	$(BUILD)/xrpc-conversion-json --request
+	$(BUILD)/xrpc-conversion-json --response
+
 $(BUILD)/config-test: tests/config_test.cc $(BUILD)/obj/config.o $(PROTO_OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 test-unit: $(BUILD)/config-test
@@ -116,7 +138,7 @@ tsan:
 test-tsan: tsan
 	$(MAKE) BUILD=$(TSAN_BUILD) python-protos
 	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 $(PYTHON) tests/load.py --cpp $(TSAN_BUILD)/ratelimit-cpp --generated $(TSAN_BUILD)/python
-test: test-unit test-smoke
+test: test-unit test-smoke test-wire
 run: all
 	./$(BUILD)/ratelimit-cpp
 install: all

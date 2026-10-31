@@ -1,0 +1,7 @@
+{
+  "entries": [
+    { "key": "message_type", "value": "marketing" },
+    { "key": "to_number", "value": "2227777" }
+  ],
+  "is_negative_hits": false
+}

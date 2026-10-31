@@ -1,0 +1,21 @@
+{
+  "domain": "messaging",
+  "hits_addend": 1,
+  "descriptors": [
+    {
+      "entries": [
+        { "key": "message_type", "value": "marketing" },
+        { "key": "to_number", "value": "2227777" }
+      ],
+      "limit": { "requests_per_unit": 5, "unit": "MINUTE" },
+      "hits_addend": 0,
+      "is_negative_hits": false
+    },
+    {
+      "entries": [
+        { "key": "message_type", "value": "transactional" }
+      ],
+      "is_negative_hits": false
+    }
+  ]
+}
