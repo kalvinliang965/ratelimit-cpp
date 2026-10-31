@@ -173,7 +173,7 @@ static void full_response_tests() {
 }
 
 // Test application payloads only. The 35-byte DPO header is added separately.
-static void packet_size_round_trip_tests() {
+static void small_packet_round_trip_test() {
     // A small request with one descriptor and one entry.
     rlc::RateLimitRequest small;
     small.domain_ = "m";
@@ -212,6 +212,9 @@ static void packet_size_round_trip_tests() {
           decoded_response.statuses_[0].limit_remaining() == 4,
           "small response round trip");
 
+}
+
+static void large_packet_round_trip_test() {
     // Three entries fill the request payload exactly to 1,465 bytes.
     // Each string length still fits in one byte.
     rlc::RateLimitRequest large;
@@ -221,9 +224,9 @@ static void packet_size_round_trip_tests() {
     entries.emplace_back(std::string(255, 'a'), std::string(255, 'b'));
     entries.emplace_back(std::string(255, 'c'), std::string(255, 'd'));
     entries.emplace_back(std::string(255, 'e'), std::string(175, 'f'));
-    bytes = wire::encode_request(large);
+    auto bytes = wire::encode_request(large);
     check(bytes.size() == wire::kMaxPayloadBytes, "exact maximum request payload size");
-    decoded_request = wire::decode_request(bytes.data(), bytes.size());
+    auto decoded_request = wire::decode_request(bytes.data(), bytes.size());
     check(decoded_request.domain_ == large.domain_ &&
           decoded_request.hits_addend_ == large.hits_addend_ &&
           decoded_request.descriptors_.size() == 1 &&
@@ -256,7 +259,7 @@ static void packet_size_round_trip_tests() {
         large_response.raw_body_[i] = static_cast<char>(i % 128);
     bytes = wire::encode_response(large_response);
     check(bytes.size() == wire::kMaxPayloadBytes, "exact maximum response payload size");
-    decoded_response = wire::decode_response(bytes.data(), bytes.size(), large_response.overall_code_);
+    auto decoded_response = wire::decode_response(bytes.data(), bytes.size(), large_response.overall_code_);
     check(decoded_response.overall_code_ == large_response.overall_code_ &&
           decoded_response.statuses_.size() == 1 &&
           decoded_response.statuses_[0].code() == Response::Code::OVER_LIMIT &&
@@ -273,11 +276,25 @@ static void packet_size_round_trip_tests() {
     bytes.push_back(0);
     rejects([&] { wire::decode_response(bytes.data(), bytes.size(), Response::Code::OVER_LIMIT); });
 
-    std::cout << "PASS: small request (13 bytes), small response (12 bytes), "
-                 "and exact-limit request/response (1,465 bytes each)\n";
+}
+
+static bool run_round_trip_test(const char* name, const std::function<void()>& test) {
+    try {
+        test();
+        std::cout << "PASS: " << name << '\n';
+        return true;
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << name << ": " << error.what() << '\n';
+        return false;
+    }
 }
 
 int main() {
+    // Run both size cases independently, so either failure identifies its case.
+    const bool small_passed = run_round_trip_test("small packet round trip", small_packet_round_trip_test);
+    const bool large_passed = run_round_trip_test("large packet round trip", large_packet_round_trip_test);
+    if (!small_passed || !large_passed) return 1;
+
     try {
         rlc::RateLimitRequest request;
         request.domain_ = "a";
@@ -388,7 +405,6 @@ int main() {
         rejects([&] { wire::decode_statuses(bytes.data(), bytes.size()); });
         rejects([&] { wire::decode_request(nullptr, 1); });
         full_response_tests();
-        packet_size_round_trip_tests();
         std::cout << "PASS: wire bytes, optional values, full response fields, JSON, quotas, bounds and malformed payloads\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
