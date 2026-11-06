@@ -249,6 +249,7 @@ struct Service::Impl {
     local.emplace(key, LocalEntry{nowSeconds()+expiration(unit, calendar), size, lru.begin()});
     cache_bytes += size;
   }
+
   int64_t ttl(RateLimitResponseUnit unit) {
     int64_t value = expiration(unit, calendar);
     if (jitter_max > 0) {
@@ -257,6 +258,7 @@ struct Service::Impl {
     }
     return value;
   }
+
   std::vector<RateLimitDescriptorStatus> limit(const RateLimitRequest& request, const std::vector<std::optional<Limit>>& limits) {
     const size_t count = limits.size();
 

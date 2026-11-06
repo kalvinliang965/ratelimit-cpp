@@ -97,7 +97,7 @@ $(BUILD)/libxrpc_conversion.a: $(BUILD)/obj/xrpc_conversion.o
 $(BUILD)/xrpc-conversion-test: tests/xrpc_conversion_test.cc $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
-$(BUILD)/xrpc-conversion-json: tests/xrpc_conversion_json.cc $(BUILD)/libxrpc_conversion.a
+$(BUILD)/xrpc-conversion-json: tests/xrpc_conversion_json.cc $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
 test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-conversion-json
