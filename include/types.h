@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
+#include <cassert>
 
 
 namespace rlc {
@@ -100,6 +101,11 @@ struct RateLimitResponse {
 
 	void set_duration_until_reset(Duration d) {
 		duration_until_reset_ = d;
+	}
+
+	const Duration& duration_until_reset() const {
+	    assert(duration_until_reset_.has_value());
+	    return *duration_until_reset_;
 	}
 
     };
