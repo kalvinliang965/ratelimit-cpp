@@ -154,6 +154,10 @@ struct RateLimitResponse {
 	return statuses_.emplace_back();
     }
 
+    const std::vector<DescriptorStatus>& statuses() const {
+	return statuses_;
+    }
+
     HeaderValue& add_response_header() {
 	return response_headers_to_add_.emplace_back();
     }
