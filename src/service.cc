@@ -69,7 +69,7 @@ std::string keyFor(
   std::string key = prefix + request.domain() + "_";
 
   const auto& entries = request.descriptors(index).entries();
-  for (int i = 0; i < entries.size(); ++i) {
+  for (size_t i = 0; i < entries.size(); ++i) {
     const auto& pattern = static_cast<size_t>(i) < limit.share_patterns.size() ? limit.share_patterns[i] : std::string();
     key += entries[i].key() + "_" + (pattern.empty() ? entries[i].value() : pattern) + "_";
   }

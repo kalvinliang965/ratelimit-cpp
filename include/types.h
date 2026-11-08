@@ -54,8 +54,19 @@ struct RateLimitResponse {
     struct Duration {
         int64_t seconds_ = 0;
         int32_t nanos_ = 0;
+
+	Duration() = default;
+
 	Duration(int64_t second, int32_t nano) 
 		:seconds_(second), nanos_(nano) {}
+
+	int64_t seconds() const {
+	    return seconds_;
+	}
+
+	int32_t nanos() const {
+		return nanos_;
+	}
     };
 
     struct Quota {
