@@ -103,6 +103,10 @@ struct RateLimitResponse {
 		duration_until_reset_ = d;
 	}
 
+        bool has_duration_until_reset() const {
+            return duration_until_reset_.has_value();
+    	}
+
 	const Duration& duration_until_reset() const {
 	    assert(duration_until_reset_.has_value());
 	    return *duration_until_reset_;
