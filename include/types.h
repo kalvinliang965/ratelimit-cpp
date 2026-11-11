@@ -77,7 +77,7 @@ struct RateLimitResponse {
 
     struct DescriptorStatus {
         Code code_ = Code::UNKNOWN;
-        std::optional<RateLimit> current_limit_
+        std::optional<RateLimit> current_limit_;
         uint32_t limit_remaining_ = 0;
 
         std::optional<Duration> duration_until_reset_;
