@@ -171,6 +171,15 @@ struct RateLimitResponse {
         return raw_body_;
     }
 
+    bool has_dynamic_metadata() const {
+        return dynamic_metadata_.has_value();
+    }
+
+    const nlohmann::json& dynamic_metadata() const {
+        assert(dynamic_metadata_.has_value());
+        return *dynamic_metadata_;
+    }
+
     HeaderValue& add_response_header() {
 	return response_headers_to_add_.emplace_back();
     }
