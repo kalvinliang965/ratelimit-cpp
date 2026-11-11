@@ -77,8 +77,9 @@ struct RateLimitResponse {
 
     struct DescriptorStatus {
         Code code_ = Code::UNKNOWN;
-        std::optional<RateLimit> current_limit_;
+        std::optional<RateLimit> current_limit_
         uint32_t limit_remaining_ = 0;
+
         std::optional<Duration> duration_until_reset_;
         std::optional<Quota> quota_;
 
@@ -156,6 +157,18 @@ struct RateLimitResponse {
 
     const std::vector<DescriptorStatus>& statuses() const {
 	return statuses_;
+    }
+
+    const std::vector<HeaderValue>& response_headers_to_add() const {
+        return response_headers_to_add_;
+    }
+
+    const std::vector<HeaderValue>& request_headers_to_add() const {
+        return request_headers_to_add_;
+    }
+
+    const std::string& raw_body() const {
+        return raw_body_;
     }
 
     HeaderValue& add_response_header() {
