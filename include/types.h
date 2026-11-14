@@ -83,6 +83,10 @@ struct RateLimitResponse {
         std::optional<Duration> duration_until_reset_;
         std::optional<Quota> quota_;
 
+	bool has_current_limit() const {
+	    return current_limit_.has_value();
+	}
+
 	const RateLimit& current_limit() const {
 		return current_limit_.value();
 	}
@@ -107,10 +111,6 @@ struct RateLimitResponse {
 		current_limit_ = limit;
 	}
 
-	bool has_current_limit() const {
-	    return current_limit_.has_value();
-	}
-
 	void set_duration_until_reset(Duration d) {
 		duration_until_reset_ = d;
 	}
@@ -120,8 +120,7 @@ struct RateLimitResponse {
     	}
 
 	const Duration& duration_until_reset() const {
-	    assert(duration_until_reset_.has_value());
-	    return *duration_until_reset_;
+	    return duration_until_reset_.value();
 	}
 
     };
