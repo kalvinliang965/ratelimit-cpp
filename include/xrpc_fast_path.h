@@ -45,6 +45,11 @@ struct EncodedFastPathRequest {
     std::optional<FastPathRequest> fast_path;
 };
 
+struct EncodedFastPathResponse {
+    std::vector<uint8_t> payload;
+    std::optional<FastPathResponse> fast_path;
+};
+
 } // namespace xrpc_conversion
 
 #endif /* XRPC_FAST_PATH_H */

@@ -4,6 +4,7 @@
 #define	XRPC_CONVERSION_H
 
 #include "types.h"
+#include "xrpc_fast_path.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -29,13 +30,18 @@ using Statuses = std::vector<rlc::RateLimitResponse::DescriptorStatus>;
 // Decoders also require the actual number of bytes in data; size must not exceed
 // max_payload. All functions throw std::runtime_error for invalid input.
 Bytes encode_request(const rlc::RateLimitRequest& request, size_t max_payload);
-rlc::RateLimitRequest decode_request(const uint8_t* data, size_t size, size_t max_payload);
-Bytes encode_statuses(const Statuses& statuses, size_t max_payload);
-Statuses decode_statuses(const uint8_t* data, size_t size, size_t max_payload);
-// Overall code is carried separately in the fixed DPO header.
 Bytes encode_response(const rlc::RateLimitResponse& response, size_t max_payload);
-rlc::RateLimitResponse decode_response(const uint8_t* data, size_t size,
-                                       rlc::RateLimitResponse::Code overall_code, size_t max_payload);
+Bytes encode_statuses(const Statuses& statuses, size_t max_payload);
+
+EncodedFastPathRequest encode_request_with_fast_path(const rlc::RateLimitRequest& request, size_t max_payload);
+EncodedFastPathResponse encode_response_with_fast_path(const rlc::RateLimitResponse& response, size_t max_payload);
+
+rlc::RateLimitResponse response_from_fast_path(const FastPathResponse& response);
+
+rlc::RateLimitRequest decode_request(const uint8_t* data, size_t size, size_t max_payload);
+rlc::RateLimitResponse decode_response(const uint8_t* data, size_t size, rlc::RateLimitResponse::Code overall_code, size_t max_payload);
+Statuses decode_statuses(const uint8_t* data, size_t size, size_t max_payload);
+
 } // namespace xrpc_conversion
 
 #endif // XRPC_CONVERSION_H

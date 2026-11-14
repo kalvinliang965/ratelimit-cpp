@@ -87,7 +87,7 @@ $(BUILD)/ratelimit-cpp: $(OBJECTS) $(PROTO_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 # The wire codec has no gRPC/Protobuf dependency and can be tested or linked
 # independently.  The main service also picks up src/xrpc_conversion.cc.
-$(BUILD)/obj/xrpc_conversion.o: src/xrpc_conversion.cc include/xrpc_conversion.h include/types.h
+$(BUILD)/obj/xrpc_conversion.o: src/xrpc_conversion.cc include/xrpc_conversion.h include/xrpc_fast_path.h include/types.h
 	@mkdir -p $(@D)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
@@ -97,11 +97,15 @@ $(BUILD)/libxrpc_conversion.a: $(BUILD)/obj/xrpc_conversion.o
 $(BUILD)/xrpc-conversion-test: tests/xrpc_conversion_test.cc $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
+$(BUILD)/xrpc-fast-path-test: tests/xrpc_fast_path_test.cc $(BUILD)/libxrpc_conversion.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
 $(BUILD)/xrpc-conversion-json: tests/xrpc_conversion_json.cc $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
-test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-conversion-json
+test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-fast-path-test $(BUILD)/xrpc-conversion-json
 	$(BUILD)/xrpc-conversion-test
+	$(BUILD)/xrpc-fast-path-test
 	$(BUILD)/xrpc-conversion-json --request
 	$(BUILD)/xrpc-conversion-json --response
 

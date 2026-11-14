@@ -162,7 +162,30 @@ enum class DescriptorFlag : uint8_t {
 	IS_NEGATIVE_HITS = 1 << 2
 };
 
-Bytes encode_request(const Request& request, size_t max_payload) {
+namespace {
+
+// projection means containing only request or response field 
+// that fast path need.
+bool project_string(const std::string& input, FastPathString& output) {
+    if (input.size() > kFastPathStringBytes) return false;
+    output = {};
+    output.length = static_cast<uint8_t>(input.size());
+    for (size_t i = 0; i < input.size(); ++i)
+        output.bytes[i] = static_cast<uint8_t>(static_cast<unsigned char>(input[i]));
+    return true;
+}
+std::string projection_string(const FastPathString& value) {
+    if (value.length > kFastPathStringBytes) throw std::runtime_error("invalid fast-path string length");
+    return std::string(value.bytes.begin(), value.bytes.begin() + value.length);
+}
+
+}
+
+static Bytes encode_request_impl(const Request& request, size_t max_payload,
+                                 std::optional<FastPathRequest>* projection) {
+    bool eligible = request.descriptors().size() == 1;
+    FastPathRequest fast{};
+    if (projection) eligible = project_string(request.domain(), fast.domain) && eligible;
     BufferWriter writer(max_payload);
     writer.write_string(request.domain());
     writer.write_u32(request.hits_addend());
@@ -173,6 +196,13 @@ Bytes encode_request(const Request& request, size_t max_payload) {
     writer.write_u8(static_cast<uint8_t>(request.descriptors().size()));
 
     for (const auto& descriptor : request.descriptors()) {
+        if (projection) {
+            eligible = eligible && descriptor.entries().size() == 1 && descriptor.has_limit() && !descriptor.is_negative_hits();
+            if (descriptor.has_limit()) {
+                fast.override_unit = static_cast<uint8_t>(descriptor.limit().unit());
+                fast.override_requests_per_unit = descriptor.limit().requests_per_unit();
+            }
+        }
         if (descriptor.entries().size() > std::numeric_limits<uint8_t>::max()) {
             throw std::runtime_error("entry count does not fit in one byte");
         }
@@ -195,11 +225,24 @@ Bytes encode_request(const Request& request, size_t max_payload) {
             writer.write_u64(*descriptor.hits_addend());
         }
         for (const auto& entry : descriptor.entries()) {
+            if (projection && eligible)
+                eligible = project_string(entry.key(), fast.entry_key) && project_string(entry.value(), fast.entry_value);
             writer.write_string(entry.key());
             writer.write_string(entry.value());
         }
     }
+    if (projection) *projection = eligible ? std::optional<FastPathRequest>(fast) : std::nullopt;
     return writer.release();
+}
+
+Bytes encode_request(const Request& request, size_t max_payload) {
+    return encode_request_impl(request, max_payload, nullptr);
+}
+
+EncodedFastPathRequest encode_request_with_fast_path(const Request& request, size_t max_payload) {
+    EncodedFastPathRequest result;
+    result.payload = encode_request_impl(request, max_payload, &result.fast_path);
+    return result;
 }
 
 Request decode_request(const uint8_t* data, size_t size, size_t max_payload) {
@@ -437,6 +480,54 @@ Bytes encode_response(const Response& response, size_t max_payload) {
     if (response.quota_) write_quota(out, *response.quota_);
     return out.release();
 }
+
+EncodedFastPathResponse encode_response_with_fast_path(const Response& response, size_t max_payload) {
+    EncodedFastPathResponse result;
+    result.payload = encode_response(response, max_payload);
+    if (response.overall_code_ != Response::Code::OVER_LIMIT || response.statuses_.size() != 1 ||
+        response.dynamic_metadata_ || response.quota_ || !response.response_headers_to_add_.empty() ||
+        !response.request_headers_to_add_.empty() || !response.raw_body_.empty()) return result;
+    const auto& status = response.statuses_[0];
+    if (status.code_ != Response::Code::OVER_LIMIT || status.limit_remaining_ != 0 ||
+        !status.current_limit_ || !status.duration_until_reset_ || status.quota_) return result;
+    const auto& limit = *status.current_limit_;
+    const auto& duration = *status.duration_until_reset_;
+    const int unit = static_cast<int>(limit.unit());
+    if (unit < 0 || unit > 7 || duration.seconds_ < 0 || duration.nanos_ < 0 || duration.nanos_ >= 1000000000) return result;
+    FastPathResponse fast{};
+    if (!project_string(limit.name(), fast.current_limit_name)) return result;
+    fast.overall_code = static_cast<uint8_t>(response.overall_code_);
+    fast.status_code = static_cast<uint8_t>(status.code_);
+    fast.current_limit_requests_per_unit = limit.requests_per_unit();
+    fast.current_limit_unit = static_cast<uint8_t>(unit);
+    fast.limit_remaining = status.limit_remaining_;
+    fast.duration_until_reset_seconds = duration.seconds_;
+    fast.duration_until_reset_nanos = duration.nanos_;
+    result.fast_path = fast;
+    return result;
+}
+
+Response response_from_fast_path(const FastPathResponse& fast) {
+    if (fast.overall_code != static_cast<uint8_t>(Response::Code::OVER_LIMIT) ||
+        fast.status_code != static_cast<uint8_t>(Response::Code::OVER_LIMIT) ||
+        fast.limit_remaining != 0 || fast.current_limit_unit > 7 ||
+        fast.duration_until_reset_seconds < 0 || fast.duration_until_reset_nanos < 0 ||
+        fast.duration_until_reset_nanos >= 1000000000)
+        throw std::runtime_error("invalid fast-path response");
+    Response result;
+    result.set_overall_code(Response::Code::OVER_LIMIT);
+    auto& status = result.add_statuses();
+    status.set_code(Response::Code::OVER_LIMIT);
+    status.set_limit_remaining(fast.limit_remaining);
+    Response::RateLimit limit;
+    limit.set_name(projection_string(fast.current_limit_name));
+    limit.set_requests_per_unit(fast.current_limit_requests_per_unit);
+    limit.set_unit(static_cast<Response::RateLimit::Unit>(fast.current_limit_unit));
+    status.set_current_limit(limit);
+    status.set_duration_until_reset(Response::Duration(fast.duration_until_reset_seconds, fast.duration_until_reset_nanos));
+    return result;
+}
+
 Response decode_response(const uint8_t* data, size_t size, Response::Code overall_code, size_t max_payload) {
     require(static_cast<uint32_t>(overall_code) <= 2, "invalid overall code");
     BufferReader in(data, size, max_payload);
