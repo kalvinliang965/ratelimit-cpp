@@ -36,6 +36,9 @@ Bytes encode_statuses(const Statuses& statuses, size_t max_payload);
 EncodedFastPathRequest encode_request_with_fast_path(const rlc::RateLimitRequest& request, size_t max_payload);
 EncodedFastPathResponse encode_response_with_fast_path(const rlc::RateLimitResponse& response, size_t max_payload);
 
+std::optional<FastPathRequest> fast_path_from_request(const rlc::RateLimitRequest& request);
+std::optional<FastPathResponse> fast_path_from_response(const rlc::RateLimitResponse& response);
+
 rlc::RateLimitResponse response_from_fast_path(const FastPathResponse& response);
 
 rlc::RateLimitRequest decode_request(const uint8_t* data, size_t size, size_t max_payload);

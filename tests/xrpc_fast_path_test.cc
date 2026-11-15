@@ -66,6 +66,16 @@ int main() {
     request.descriptors_[0].limit_.reset();
     assert(!encode_request_with_fast_path(request, 1500).fast_path);
 
+    // an override unit outside SECOND..YEAR is rejected from s0
+    request.descriptors_[0].limit_.emplace(5, rlc::RateLimitUnit::UNKNOWN);
+    assert(!encode_request_with_fast_path(request, 1500).fast_path);
+    request.descriptors_[0].limit_.emplace(5, static_cast<rlc::RateLimitUnit>(7));
+    assert(!fast_path_from_request(request).has_value());
+    request.descriptors_[0].limit_.emplace(5, static_cast<rlc::RateLimitUnit>(258));
+    assert(!fast_path_from_request(request).has_value());
+    request.descriptors_[0].limit_.emplace(5, static_cast<rlc::RateLimitUnit>(-254));
+    assert(!fast_path_from_request(request).has_value());
+
     // more than one entry is rejeected from s0
     request.descriptors_[0].limit_ = descriptor.limit_;
     request.descriptors_[0].entries_.emplace_back("second", "entry");

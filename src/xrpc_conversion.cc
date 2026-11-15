@@ -181,11 +181,31 @@ std::string projection_string(const FastPathString& value) {
 
 }
 
-static Bytes encode_request_impl(const Request& request, size_t max_payload,
-                                 std::optional<FastPathRequest>* projection) {
+std::optional<FastPathRequest> fast_path_from_request(const Request& request) {
     bool eligible = request.descriptors().size() == 1;
     FastPathRequest fast{};
-    if (projection) eligible = project_string(request.domain(), fast.domain) && eligible;
+    eligible = project_string(request.domain(), fast.domain) && eligible;
+
+    for (const auto& descriptor : request.descriptors()) {
+        eligible = eligible && descriptor.entries().size() == 1 && descriptor.has_limit() && !descriptor.is_negative_hits();
+        if (descriptor.has_limit()) {
+            const int32_t unit = static_cast<int32_t>(descriptor.limit().unit());
+            // S0 builds its key from the override, so only SECOND..YEAR is eligible.
+            if (unit < static_cast<int32_t>(rlc::RateLimitUnit::SECOND) ||
+                unit > static_cast<int32_t>(rlc::RateLimitUnit::YEAR)) eligible = false;
+            fast.override_unit = static_cast<uint8_t>(unit);
+            fast.override_requests_per_unit = descriptor.limit().requests_per_unit();
+        }
+        for (const auto& entry : descriptor.entries()) {
+            if (eligible)
+                eligible = project_string(entry.key(), fast.entry_key) && project_string(entry.value(), fast.entry_value);
+        }
+    }
+    if (!eligible) return std::nullopt;
+    return fast;
+}
+
+Bytes encode_request(const Request& request, size_t max_payload) {
     BufferWriter writer(max_payload);
     writer.write_string(request.domain());
     writer.write_u32(request.hits_addend());
@@ -196,13 +216,6 @@ static Bytes encode_request_impl(const Request& request, size_t max_payload,
     writer.write_u8(static_cast<uint8_t>(request.descriptors().size()));
 
     for (const auto& descriptor : request.descriptors()) {
-        if (projection) {
-            eligible = eligible && descriptor.entries().size() == 1 && descriptor.has_limit() && !descriptor.is_negative_hits();
-            if (descriptor.has_limit()) {
-                fast.override_unit = static_cast<uint8_t>(descriptor.limit().unit());
-                fast.override_requests_per_unit = descriptor.limit().requests_per_unit();
-            }
-        }
         if (descriptor.entries().size() > std::numeric_limits<uint8_t>::max()) {
             throw std::runtime_error("entry count does not fit in one byte");
         }
@@ -225,23 +238,17 @@ static Bytes encode_request_impl(const Request& request, size_t max_payload,
             writer.write_u64(*descriptor.hits_addend());
         }
         for (const auto& entry : descriptor.entries()) {
-            if (projection && eligible)
-                eligible = project_string(entry.key(), fast.entry_key) && project_string(entry.value(), fast.entry_value);
             writer.write_string(entry.key());
             writer.write_string(entry.value());
         }
     }
-    if (projection) *projection = eligible ? std::optional<FastPathRequest>(fast) : std::nullopt;
     return writer.release();
-}
-
-Bytes encode_request(const Request& request, size_t max_payload) {
-    return encode_request_impl(request, max_payload, nullptr);
 }
 
 EncodedFastPathRequest encode_request_with_fast_path(const Request& request, size_t max_payload) {
     EncodedFastPathRequest result;
-    result.payload = encode_request_impl(request, max_payload, &result.fast_path);
+    result.payload = encode_request(request, max_payload);
+    result.fast_path = fast_path_from_request(request);
     return result;
 }
 
@@ -481,21 +488,19 @@ Bytes encode_response(const Response& response, size_t max_payload) {
     return out.release();
 }
 
-EncodedFastPathResponse encode_response_with_fast_path(const Response& response, size_t max_payload) {
-    EncodedFastPathResponse result;
-    result.payload = encode_response(response, max_payload);
+std::optional<FastPathResponse> fast_path_from_response(const Response& response) {
     if (response.overall_code_ != Response::Code::OVER_LIMIT || response.statuses_.size() != 1 ||
         response.dynamic_metadata_ || response.quota_ || !response.response_headers_to_add_.empty() ||
-        !response.request_headers_to_add_.empty() || !response.raw_body_.empty()) return result;
+        !response.request_headers_to_add_.empty() || !response.raw_body_.empty()) return std::nullopt;
     const auto& status = response.statuses_[0];
     if (status.code_ != Response::Code::OVER_LIMIT || status.limit_remaining_ != 0 ||
-        !status.current_limit_ || !status.duration_until_reset_ || status.quota_) return result;
+        !status.current_limit_ || !status.duration_until_reset_ || status.quota_) return std::nullopt;
     const auto& limit = *status.current_limit_;
     const auto& duration = *status.duration_until_reset_;
     const int unit = static_cast<int>(limit.unit());
-    if (unit < 0 || unit > 7 || duration.seconds_ < 0 || duration.nanos_ < 0 || duration.nanos_ >= 1000000000) return result;
+    if (unit < 0 || unit > 7 || duration.seconds_ < 0 || duration.nanos_ < 0 || duration.nanos_ >= 1000000000) return std::nullopt;
     FastPathResponse fast{};
-    if (!project_string(limit.name(), fast.current_limit_name)) return result;
+    if (!project_string(limit.name(), fast.current_limit_name)) return std::nullopt;
     fast.overall_code = static_cast<uint8_t>(response.overall_code_);
     fast.status_code = static_cast<uint8_t>(status.code_);
     fast.current_limit_requests_per_unit = limit.requests_per_unit();
@@ -503,7 +508,13 @@ EncodedFastPathResponse encode_response_with_fast_path(const Response& response,
     fast.limit_remaining = status.limit_remaining_;
     fast.duration_until_reset_seconds = duration.seconds_;
     fast.duration_until_reset_nanos = duration.nanos_;
-    result.fast_path = fast;
+    return fast;
+}
+
+EncodedFastPathResponse encode_response_with_fast_path(const Response& response, size_t max_payload) {
+    EncodedFastPathResponse result;
+    result.payload = encode_response(response, max_payload);
+    result.fast_path = fast_path_from_response(response);
     return result;
 }
 
