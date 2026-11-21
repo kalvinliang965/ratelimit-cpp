@@ -1,6 +1,6 @@
 # Go test-suite parity audit
 
-The adjacent `../ratelimit` checkout is the behavioral reference.  Its Go
+The pinned `third_party/ratelimit` submodule is the behavioral reference.  Its Go
 tests remain unmodified.  This document separates behavior that can be run
 through the standalone service from tests that deliberately exercise Go
 objects, mocks, an injected clock, or an in-process stats store.

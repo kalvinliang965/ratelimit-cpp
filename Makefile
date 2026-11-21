@@ -50,7 +50,7 @@ help:
 	@echo 'make [-j4]           Build the standalone C++ service'
 	@echo 'make test           Config, wire, and Redis/gRPC smoke tests'
 	@echo 'make test-wire      Standalone wire codec and JSON round-trip tests'
-	@echo 'make test-parity     Compare against ../ratelimit Go checkout (Go required)'
+	@echo 'make test-parity     Compare against the pinned Go submodule (Go required)'
 	@echo 'make test-go-reference-vectors Run selected unmodified Go test fixtures through real C++/Go gRPC/Redis'
 	@echo 'make test-integration Run black-box Redis/gRPC/restart/failure parity checks'
 	@echo 'make test-load       Run real multi-client gRPC/Redis concurrency and restart parity checks'
@@ -117,9 +117,11 @@ python-protos: $(BUILD)/generated/.stamp
 	$(PYTHON) scripts/python_protos.py $(BUILD)/api.pb $(BUILD)/python
 test-smoke: all python-protos
 	$(PYTHON) tests/parity.py --cpp $(BUILD)/ratelimit-cpp --generated $(BUILD)/python
+.PHONY: $(BUILD)/ratelimit-go
 $(BUILD)/ratelimit-go:
+	@test -f third_party/ratelimit/go.mod || { echo 'Run git submodule update --init --recursive first'; exit 1; }
 	@mkdir -p $(BUILD)
-	cd ../ratelimit && GOCACHE=$(GO_BUILD_CACHE) GOMODCACHE=$(GO_MODULE_CACHE) go build -o $(abspath $@) ./src/service_cmd
+	cd third_party/ratelimit && GOCACHE=$(GO_BUILD_CACHE) GOMODCACHE=$(GO_MODULE_CACHE) go build -o $(abspath $@) ./src/service_cmd
 test-parity: all python-protos $(BUILD)/ratelimit-go
 	$(PYTHON) tests/parity.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
 test-go-reference-vectors: all python-protos $(BUILD)/ratelimit-go

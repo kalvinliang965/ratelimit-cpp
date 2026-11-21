@@ -56,7 +56,7 @@ services:
 
   ratelimit-go:
     build:
-      context: ../ratelimit
+      context: ./third_party/ratelimit
       dockerfile: Dockerfile
     command: /bin/ratelimit
     depends_on:

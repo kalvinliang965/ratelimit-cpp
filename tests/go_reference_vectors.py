@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run selected unmodified Go rate-limit test vectors against both servers.
 
-The vector data deliberately refers to configuration files in ``../ratelimit``
+The vector data deliberately refers to configuration files in ``third_party/ratelimit``
 instead of copied policy text.  That keeps the Go tests' checked-in policies as
 the source of truth while this driver supplies the implementation-neutral part:
 real gRPC requests, an empty real Redis instance per implementation, and exact
@@ -24,7 +24,7 @@ import time
 
 
 THIS_DIRECTORY = Path(__file__).resolve().parent
-WORKSPACE = THIS_DIRECTORY.parents[1]
+WORKSPACE = THIS_DIRECTORY.parent / "third_party"
 DEFAULT_VECTORS = THIS_DIRECTORY / "go_reference_vectors.json"
 
 

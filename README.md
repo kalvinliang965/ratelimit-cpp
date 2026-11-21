@@ -1,6 +1,6 @@
 # C++ Envoy Rate Limit Service
 
-This is a standalone C++17 implementation of the adjacent `ratelimit` Go
+This is a standalone C++17 implementation of the upstream `ratelimit` Go
 service. It keeps the Envoy v3 RateLimitService gRPC wire API, the policy YAML
 format, Redis key layout, counter updates, and environment-variable interface.
 It can replace the `ratelimit` container in `ratelimit-lab` by changing only the
@@ -83,7 +83,11 @@ for the JSON fixtures, output files, and standalone library.
 `make test` runs the wire codec checks, policy unit tests, and 20 live C++ Redis/gRPC scenarios.
 It needs `redis-server` and Python packages `grpcio` and `protobuf`.
 
-`make test-parity` also builds the adjacent Go reference and compares every
+The Go reference is pinned as a submodule at `third_party/ratelimit`. Clone with
+`--recurse-submodules`, or run `git submodule update --init --recursive` in an
+existing checkout to get the pinned revision.
+
+`make test-parity` also builds the pinned Go reference and compares every
 serialized gRPC response, gRPC error, and final Redis counters. It tests 199
 request comparisons across the policy and cache behaviors listed above.
 
