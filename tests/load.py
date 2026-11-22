@@ -386,7 +386,6 @@ def main():
         parser.error("--rounds, --clients, and --calls-per-client must be positive")
     sys.path.insert(0, str(Path(args.generated).resolve()))
     global health
-    from envoy.service.ratelimit.v3 import rls_pb2 as rls
     # `grpc` is already the installed grpcio package, so Python cannot import
     # a generated `grpc.health` namespace below it in the usual way.  Load
     # this dependency-free generated module by path; its descriptors and
@@ -395,7 +394,7 @@ def main():
     spec = importlib.util.spec_from_file_location("ratelimit_health_pb2", health_path)
     health = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(health)
-    base.rls = rls
+    base.load_protos(args.generated)
     runner = Runner(args)
     runner.health()
     runner.atomic_multi_client_load()
