@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
 """Focused tests for parity_suite/comparison.py (no servers needed).
 
 Equivalent Go/C++ formatting must compare equal; every other difference must
 still fail.
 """
 
-import argparse
 import base64
-import sys
 
 from google.protobuf import json_format
 
@@ -113,19 +110,3 @@ def test_grpc_errors():
     different("error vs response", ("INTERNAL", space), response())
     same("raw bytes identical", b"\x08\x01", b"\x08\x01")
     different("raw bytes differ", b"\x08\x01", b"\x08\x02")
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--generated", default="build/python", help="Generated Python protobuf directory")
-    args = parser.parse_args()
-    scenarios.load_protos(args.generated)
-    test_embedded_override_text()
-    test_whitespace_elsewhere_is_strict()
-    test_other_fields_stay_strict()
-    test_grpc_errors()
-    print("parity comparison: %d checks passed" % passed)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

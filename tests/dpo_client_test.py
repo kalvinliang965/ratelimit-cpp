@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check the DPO UDP socket client against an independent model of its packets.
 
 The expected bytes come from this file, not from the C++ codec:
@@ -13,7 +12,6 @@ answers with controlled response packets; the client's --json and text output
 are checked against hand-written expectations.
 """
 
-import argparse
 import json
 from pathlib import Path
 import re
@@ -442,35 +440,3 @@ def test_cli(client):
         result = subprocess.run([client, *args], input=json.dumps(single()), capture_output=True, text=True)
         check(result.returncode == 1 and message in result.stderr, "%s: %r" % (args, result))
     ok("cli_arguments_validated")
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--client", help="ratelimit-client-socket executable")
-    parser.add_argument("--dpo-root", help="smartnic-generic-rpc checkout; its files are only read as text")
-    parser.add_argument("--generated", help="Generated Python protobuf directory (checks --json loads)")
-    parser.add_argument("--layout-only", action="store_true",
-                        help="Only compare the layout with --dpo-root's ratelimit.dpo and generated header")
-    args = parser.parse_args()
-    if args.layout_only and not args.dpo_root:
-        parser.error("--layout-only requires --dpo-root")
-    if not args.layout_only and not args.client:
-        parser.error("--client is required unless --layout-only is given")
-    dpo_root = Path(args.dpo_root).resolve() if args.dpo_root else None
-    check_layout_is_contiguous()
-    if dpo_root:
-        check_against_dpo(dpo_root)
-    if args.layout_only:
-        print("DPO header layout: %d checks passed" % passed)
-        return
-    client = str(Path(args.client).resolve())
-    test_request_packets(client, dpo_root)
-    test_responses(client, args.generated)
-    test_cli(client)
-    skipped = [what for what, given in [("--dpo-root", dpo_root), ("--generated", args.generated)] if not given]
-    print("DPO socket client: %d checks passed%s" % (
-        passed, "; skipped checks needing " + ", ".join(skipped) if skipped else ""))
-
-
-if __name__ == "__main__":
-    main()

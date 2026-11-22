@@ -25,10 +25,12 @@ import grpc
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
-import parity as base  # noqa: E402
+from common import support  # noqa: E402
+from parity_suite import grpc_server, scenarios  # noqa: E402
+import parity_suite.runner as parity_runner  # noqa: E402
 
 
-class ManagedServer(base.Server):
+class ManagedServer(grpc_server.Server):
     """The parity fixture with controlled application and Redis restarts."""
 
     def __init__(self, *args, **kwargs):
@@ -58,8 +60,8 @@ class ManagedServer(base.Server):
                 grpc.channel_ready_future(self.channel).result(timeout=0.2)
                 self.rpc = self.channel.unary_unary(
                     "/envoy.service.ratelimit.v3.RateLimitService/ShouldRateLimit",
-                    request_serializer=base.rls.RateLimitRequest.SerializeToString,
-                    response_deserializer=base.rls.RateLimitResponse.FromString)
+                    request_serializer=scenarios.rls.RateLimitRequest.SerializeToString,
+                    response_deserializer=scenarios.rls.RateLimitResponse.FromString)
                 return
             except grpc.FutureTimeoutError:
                 pass
@@ -103,7 +105,7 @@ class ManagedServer(base.Server):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             try:
-                if base.redis_command(port, "PING") == "PONG":
+                if support.redis_command(port, "PING") == "PONG":
                     self.redis_processes[port] = process
                     return
             except OSError:
@@ -115,8 +117,8 @@ class ManagedServer(base.Server):
         channel = grpc.insecure_channel("127.0.0.1:%d" % self.port)
         rpc = channel.unary_unary(
             "/envoy.service.ratelimit.v3.RateLimitService/ShouldRateLimit",
-            request_serializer=base.rls.RateLimitRequest.SerializeToString,
-            response_deserializer=base.rls.RateLimitResponse.FromString)
+            request_serializer=scenarios.rls.RateLimitRequest.SerializeToString,
+            response_deserializer=scenarios.rls.RateLimitResponse.FromString)
         try:
             return rpc(request, timeout=5)
         except grpc.RpcError as error:
@@ -125,9 +127,9 @@ class ManagedServer(base.Server):
             channel.close()
 
     def snapshot_with_ttls(self):
-        return [dict((key, (base.redis_command(port, "GET", key),
-                            base.redis_command(port, "TTL", key)))
-                     for key in sorted(base.redis_command(port, "KEYS", "*")))
+        return [dict((key, (support.redis_command(port, "GET", key),
+                            support.redis_command(port, "TTL", key)))
+                     for key in sorted(support.redis_command(port, "KEYS", "*")))
                 for port in self.redis_ports]
 
     def sanitizer_errors(self):
@@ -173,14 +175,14 @@ class Runner:
 
     def exact(self, outcomes, label):
         self.comparisons += 1
-        if len(outcomes) > 1 and base.encoded(outcomes[0]) != base.encoded(outcomes[1]):
+        if len(outcomes) > 1 and support.encoded(outcomes[0]) != support.encoded(outcomes[1]):
             raise AssertionError("%s\nC++: %s\nGo: %s" %
-                                 (label, base.describe(outcomes[0]), base.describe(outcomes[1])))
+                                 (label, parity_runner.describe(outcomes[0]), parity_runner.describe(outcomes[1])))
         return outcomes[0]
 
     def paired_call(self, servers, request, label, settle=True):
         if settle:
-            base.settle_second()
+            parity_runner.settle_second()
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(servers)) as pool:
             outcomes = list(pool.map(lambda server: server.call(request), servers))
         return self.exact(outcomes, label)
@@ -197,8 +199,8 @@ class Runner:
             channel = grpc.insecure_channel("127.0.0.1:%d" % server.port)
             rpc = channel.unary_unary(
                 "/envoy.service.ratelimit.v3.RateLimitService/ShouldRateLimit",
-                request_serializer=base.rls.RateLimitRequest.SerializeToString,
-                response_deserializer=base.rls.RateLimitResponse.FromString)
+                request_serializer=scenarios.rls.RateLimitRequest.SerializeToString,
+                response_deserializer=scenarios.rls.RateLimitResponse.FromString)
             try:
                 grpc.channel_ready_future(channel).result(timeout=5)
                 barrier.wait(timeout=5)
@@ -216,7 +218,7 @@ class Runner:
             return [answer for group in pool.map(client, range(clients)) for answer in group]
 
     def paired_burst(self, servers, request, label):
-        base.settle_second()
+        parity_runner.settle_second()
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(servers)) as pool:
             groups = list(pool.map(
                 lambda server: self.burst(server, request, self.args.clients, self.args.calls_per_client),
@@ -225,7 +227,7 @@ class Runner:
             if any(isinstance(answer, tuple) for answer in group):
                 raise AssertionError("%s returned an RPC error: %r" % (label, group))
         if len(groups) > 1:
-            left, right = sorted(map(base.encoded, groups[0])), sorted(map(base.encoded, groups[1]))
+            left, right = sorted(map(support.encoded, groups[0])), sorted(map(support.encoded, groups[1]))
             if left != right:
                 raise AssertionError("%s: concurrent protobuf response multisets differ" % label)
         self.comparisons += len(groups[0])
@@ -233,7 +235,7 @@ class Runner:
 
     def health(self):
         name = "health_check_watch_list"
-        with self.servers(name, base.policy(base.rule("health", 4))) as servers:
+        with self.servers(name, scenarios.policy(scenarios.rule("health", 4))) as servers:
             # Generated Python message modules deliberately do not include a
             # grpc stub; construct the standard health RPCs over the wire.
             def check(server, service):
@@ -277,18 +279,18 @@ class Runner:
         requests_per_round = self.args.clients * self.args.calls_per_client
         total_requests = self.args.rounds * requests_per_round
         quota = total_requests // 2 + 2
-        config = base.policy(base.rule("shared", quota, "hour"),
-                             base.rule("companion", total_requests + 100, "hour"))
-        request = base.request(base.descriptor(("shared", "same")),
-                               base.descriptor(("companion", "same")))
+        config = scenarios.policy(scenarios.rule("shared", quota, "hour"),
+                             scenarios.rule("companion", total_requests + 100, "hour"))
+        request = scenarios.request(scenarios.descriptor(("shared", "same")),
+                               scenarios.descriptor(("companion", "same")))
         with self.servers(name, config) as servers:
             answers = []
             for round_number in range(self.args.rounds):
                 answers.extend(self.paired_burst(servers, request, "%s round %d" % (name, round_number + 1)))
-            ok = sum(answer.overall_code == base.rls.RateLimitResponse.OK for answer in answers)
+            ok = sum(answer.overall_code == scenarios.rls.RateLimitResponse.OK for answer in answers)
             if ok != quota:
                 raise AssertionError("expected %d allowed requests, received %d" % (quota, ok))
-            if any(answer.statuses[1].code != base.rls.RateLimitResponse.OK for answer in answers):
+            if any(answer.statuses[1].code != scenarios.rls.RateLimitResponse.OK for answer in answers):
                 raise AssertionError("companion descriptor unexpectedly exceeded its limit")
             snapshots = [server.snapshot_with_ttls() for server in servers]
             for snapshot in snapshots:
@@ -303,18 +305,18 @@ class Runner:
 
     def expiry_and_service_restart(self):
         name = "expiry_and_service_restart_preserves_redis_quota"
-        with self.servers(name, base.policy(base.rule("persist", 10, "hour"))) as servers:
-            used = base.one("persist")
+        with self.servers(name, scenarios.policy(scenarios.rule("persist", 10, "hour"))) as servers:
+            used = scenarios.one("persist")
             for index in range(4):
                 self.paired_call(servers, used, "%s pre-restart request %d" % (name, index + 1))
             self.paired_action(servers, lambda server: server.restart_app())
-            probe = base.one("persist", hits=0)
+            probe = scenarios.one("persist", hits=0)
             outcome = self.paired_call(servers, probe, "%s post-restart probe" % name)
             if outcome.statuses[0].limit_remaining != 6:
-                raise AssertionError("quota did not survive service restart: %s" % base.describe(outcome))
+                raise AssertionError("quota did not survive service restart: %s" % parity_runner.describe(outcome))
             outcome = self.paired_call(servers, used, "%s post-restart increment" % name)
             if outcome.statuses[0].limit_remaining != 5:
-                raise AssertionError("post-restart increment was incorrect: %s" % base.describe(outcome))
+                raise AssertionError("post-restart increment was incorrect: %s" % parity_runner.describe(outcome))
             snapshots = [server.snapshot() for server in servers]
             if len(snapshots) > 1 and snapshots[0] != snapshots[1]:
                 raise AssertionError("Redis state differs after service restart: %r" % snapshots)
@@ -322,16 +324,16 @@ class Runner:
         print("PASS", name, flush=True)
 
         name = "expired_redis_key_reopens_quota"
-        with self.servers(name, base.policy(base.rule("expiry", 2, "second"))) as servers:
-            self.paired_call(servers, base.one("expiry"), "%s initial" % name)
+        with self.servers(name, scenarios.policy(scenarios.rule("expiry", 2, "second"))) as servers:
+            self.paired_call(servers, scenarios.one("expiry"), "%s initial" % name)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline and any(server.snapshot() != [{}] for server in servers):
                 time.sleep(0.05)
             if any(server.snapshot() != [{}] for server in servers):
                 raise AssertionError("second-window Redis key did not expire")
-            outcome = self.paired_call(servers, base.one("expiry"), "%s after expiry" % name)
+            outcome = self.paired_call(servers, scenarios.one("expiry"), "%s after expiry" % name)
             if outcome.statuses[0].limit_remaining != 1:
-                raise AssertionError("expired quota did not reset: %s" % base.describe(outcome))
+                raise AssertionError("expired quota did not reset: %s" % parity_runner.describe(outcome))
         self.passed += 1
         print("PASS", name, flush=True)
 
@@ -343,14 +345,14 @@ class Runner:
         # unbounded time after Redis returns.  With one connection, a
         # successful probe proves the only connection is live.
         settings = {"REDIS_TIMEOUT": "500ms", "REDIS_POOL_SIZE": "1"}
-        config = base.policy(base.rule("recover", 5, "hour"), base.rule("probe", 1000000, "hour"))
+        config = scenarios.policy(scenarios.rule("recover", 5, "hour"), scenarios.rule("probe", 1000000, "hour"))
         with self.servers(name, config, settings) as servers:
             # Use an explicitly serialized request-level addend, matching the
             # normal Envoy client path while the Redis pool reconnects.
-            request = base.request(base.descriptor(("recover", "x")), hits=1)
+            request = scenarios.request(scenarios.descriptor(("recover", "x")), hits=1)
             # The probe matches its own rule, so each probe runs a real Redis
             # INCRBY/EXPIRE pipeline on a key separate from "recover".
-            probe = base.request(base.descriptor(("probe", "x")), hits=1)
+            probe = scenarios.request(scenarios.descriptor(("probe", "x")), hits=1)
             initial = self.paired_call(servers, request, "%s initial" % name)
             if isinstance(initial, tuple) or initial.statuses[0].limit_remaining != 4:
                 raise AssertionError("unexpected initial response: %r" % (initial,))
@@ -373,7 +375,7 @@ class Runner:
                 deadline = time.monotonic() + 15
                 while True:
                     result = server.call(probe)
-                    if not isinstance(result, tuple) and result.overall_code == base.rls.RateLimitResponse.OK:
+                    if not isinstance(result, tuple) and result.overall_code == scenarios.rls.RateLimitResponse.OK:
                         break
                     if time.monotonic() >= deadline:
                         raise AssertionError("%s did not serve Redis-backed requests after restart: %r" %
@@ -385,7 +387,7 @@ class Runner:
             # nontransactional INCRBY can have reached the new counter: the
             # first request must see exactly limit - 1 remaining.
             outcome = self.paired_call(servers, request, "%s recovered" % name)
-            if isinstance(outcome, tuple) or outcome.overall_code != base.rls.RateLimitResponse.OK \
+            if isinstance(outcome, tuple) or outcome.overall_code != scenarios.rls.RateLimitResponse.OK \
                     or outcome.statuses[0].limit_remaining != 4:
                 raise AssertionError("service did not recover after Redis restart: %r" % (outcome,))
         self.passed += 1
@@ -410,17 +412,7 @@ def main():
         args.go = str(Path(args.go).resolve())
     if args.rounds < 1 or args.clients < 1 or args.calls_per_client < 1:
         parser.error("--rounds, --clients, and --calls-per-client must be positive")
-    sys.path.insert(0, str(Path(args.generated).resolve()))
-    global health
-    # `grpc` is already the installed grpcio package, so Python cannot import
-    # a generated `grpc.health` namespace below it in the usual way.  Load
-    # this dependency-free generated module by path; its descriptors and
-    # message classes are otherwise identical to a normal import.
-    health_path = Path(args.generated).resolve() / "grpc/health/v1/health_pb2.py"
-    spec = importlib.util.spec_from_file_location("ratelimit_health_pb2", health_path)
-    health = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(health)
-    base.load_protos(args.generated)
+    load_generated(args.generated)
     runner = Runner(args)
     runner.health()
     runner.atomic_multi_client_load()
@@ -429,6 +421,21 @@ def main():
     mode = "C++/Go differential" if args.go else "C++"
     print("%s concurrency/restart validation: %d scenarios, %d exact response comparisons passed" %
           (mode, runner.passed, runner.comparisons))
+
+
+def load_generated(generated):
+    """Import the generated protobuf modules this suite uses."""
+    sys.path.insert(0, str(Path(generated).resolve()))
+    global health
+    # `grpc` is already the installed grpcio package, so Python cannot import
+    # a generated `grpc.health` namespace below it in the usual way.  Load
+    # this dependency-free generated module by path; its descriptors and
+    # message classes are otherwise identical to a normal import.
+    health_path = Path(generated).resolve() / "grpc/health/v1/health_pb2.py"
+    spec = importlib.util.spec_from_file_location("ratelimit_health_pb2", health_path)
+    health = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(health)
+    scenarios.load_protos(generated)
 
 
 if __name__ == "__main__":

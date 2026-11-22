@@ -1,7 +1,13 @@
 CXX ?= c++
 AR ?= ar
 PROTOC ?= /usr/bin/protoc
+# Python: uv's locked environment (pyproject.toml, uv.lock) when uv is
+# installed, otherwise python3 with grpcio, protobuf and pytest installed.
+ifneq ($(shell command -v uv 2>/dev/null),)
+PYTHON ?= uv run --locked python
+else
 PYTHON ?= python3
+endif
 BUILD ?= build
 PREFIX ?= /usr/local
 GO_BUILD_CACHE ?= $(CURDIR)/.cache/go-build
@@ -44,28 +50,32 @@ ASAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=address,undefined
 TSAN_CXXFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=thread
 TSAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=thread
 
-.PHONY: all clean run test test-unit test-smoke test-wire dpo-client test-dpo-client test-redis-pool test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
+.PHONY: all clean run test test-all test-unit test-smoke test-wire dpo-client test-dpo-client test-redis-pool test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
 all: $(BUILD)/ratelimit-cpp
 help:
 	@echo 'make [-j4]           Build the standalone C++ service'
-	@echo 'make test           Config, wire, and Redis/gRPC smoke tests'
-	@echo 'make test-wire      Standalone wire codec and JSON round-trip tests'
-	@echo 'make dpo-client     Build the DPO UDP socket client (build/ratelimit-client-socket)'
-	@echo 'make test-dpo-client Packet codec test plus captured-packet checks against a mock UDP server'
-	@echo 'make test-parity     Compare against the pinned Go submodule (Go required)'
-	@echo 'make test-go-reference-vectors Run selected unmodified Go test fixtures through real C++/Go gRPC/Redis'
-	@echo 'make test-integration Run black-box Redis/gRPC/restart/failure parity checks'
-	@echo 'make test-load       Run real multi-client gRPC/Redis concurrency and restart parity checks'
-	@echo 'make test-redis-pool Run C++ Redis pool tests for idle connections Redis closed (Linux, needs openssl)'
-	@echo 'make test-backend-modes Run real Docker Redis Cluster/Sentinel C++/Go gRPC parity checks'
-	@echo 'make test-asan       Build with ASan/UBSan and run the C++ load suite'
-	@echo 'make test-tsan       Build with TSan and run the C++ load suite (if runtime supports it)'
-	@echo 'make run            Run using environment configuration'
-	@echo 'make install        Install binary under PREFIX (default /usr/local)'
-	@echo 'make deps           Download unprivileged Ubuntu build dependencies into .deps/'
-	@echo 'make docker-build   Build the C++ runtime and external gRPC client images cleanly'
-	@echo 'make docker-test    Run the Docker Redis/gRPC/restart/Go-parity validation'
-	@echo 'make clean          Remove generated build files'
+	@echo 'make test            Quick checks: config unit test, wire codec, C++ smoke scenarios'
+	@echo 'make test-all        Every suite below except Docker backend modes and sanitizers (Go required)'
+	@echo 'make test-wire       Standalone wire codec and JSON round-trip tests'
+	@echo 'make test-parity     Byte-compare C++ and the pinned Go reference on every parity scenario'
+	@echo 'make test-load       Multi-client concurrency, restart and Redis recovery (C++/Go)'
+	@echo 'make test-integration Black-box Redis/gRPC/restart/failure checks (C++/Go)'
+	@echo 'make test-go-reference-vectors Unmodified Go test fixtures through real C++/Go services'
+	@echo 'make test-redis-pool C++ Redis pool tests for idle connections Redis closed (Linux, openssl)'
+	@echo 'make dpo-client      Build the DPO UDP socket client (build/ratelimit-client-socket)'
+	@echo 'make test-dpo-client Packet codec test plus captured-packet checks against a mock UDP peer'
+	@echo 'make test-backend-modes Redis Cluster/Sentinel C++/Go parity (starts Docker containers)'
+	@echo 'make test-asan       ASan/UBSan build, then the C++ load suite'
+	@echo 'make test-tsan       TSan build, then the C++ load suite (if the runtime supports it)'
+	@echo 'make run             Run using environment configuration'
+	@echo 'make install         Install binary under PREFIX (default /usr/local)'
+	@echo 'make deps            Download unprivileged Ubuntu build dependencies into .deps/'
+	@echo 'make docker-build    Build the C++ runtime and external gRPC client images cleanly'
+	@echo 'make docker-test     Run the Docker Redis/gRPC/restart/Go-parity validation'
+	@echo 'make clean           Remove generated build files'
+	@echo ''
+	@echo 'Python suites use uv (uv.lock) if installed, else python3; PYTHON=... overrides.'
+	@echo 'Pass pytest options with PYTEST_ARGS, e.g. make test-parity PYTEST_ARGS="-k metadata -v"'
 check-deps:
 	@command -v $(CXX) >/dev/null
 	@test -x '$(PROTOC)' || { echo 'Install protobuf-compiler or set PROTOC'; exit 1; }
@@ -140,7 +150,8 @@ dpo-client: $(BUILD)/ratelimit-client-socket
 
 test-dpo-client: $(BUILD)/ratelimit-packet-codec-test $(BUILD)/ratelimit-client-socket
 	$(BUILD)/ratelimit-packet-codec-test
-	$(PYTHON) tests/dpo_client_test.py --client $(BUILD)/ratelimit-client-socket $(if $(DPO_ROOT),--dpo-root $(DPO_ROOT))
+	$(PYTEST) tests/test_dpo_client.py --dpo-client=$(BUILD)/ratelimit-client-socket \
+		--generated=$(BUILD)/python $(if $(DPO_ROOT),--dpo-root=$(DPO_ROOT)) $(PYTEST_ARGS)
 
 -include $(DPO_CLIENT_OBJS:.o=.d)
 
@@ -150,37 +161,51 @@ test-unit: $(BUILD)/config-test
 	./$(BUILD)/config-test
 python-protos: $(BUILD)/generated/.stamp
 	$(PYTHON) scripts/python_protos.py $(BUILD)/api.pb $(BUILD)/python
-test-smoke: all python-protos
-	$(PYTHON) tests/parity.py --cpp $(BUILD)/ratelimit-cpp --generated $(BUILD)/python
 .PHONY: $(BUILD)/ratelimit-go
 $(BUILD)/ratelimit-go:
 	@test -f third_party/ratelimit/go.mod || { echo 'Run git submodule update --init --recursive first'; exit 1; }
 	@mkdir -p $(BUILD)
 	cd third_party/ratelimit && GOCACHE=$(GO_BUILD_CACHE) GOMODCACHE=$(GO_MODULE_CACHE) go build -o $(abspath $@) ./src/service_cmd
+
+# Python suites run under pytest (tests/test_*.py).  Add pytest options with
+# PYTEST_ARGS, for example: make test-parity PYTEST_ARGS='-k metadata -v'
+PYTEST = $(PYTHON) -m pytest
+PYTEST_ARGS ?=
+CPP_TEST_ARGS = --cpp=$(BUILD)/ratelimit-cpp --generated=$(BUILD)/python
+GO_TEST_ARGS = $(CPP_TEST_ARGS) --go=$(BUILD)/ratelimit-go
+
+test-smoke: all python-protos
+	$(PYTEST) tests/test_parity.py tests/test_comparison.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
 test-parity: all python-protos $(BUILD)/ratelimit-go
-	$(PYTHON) tests/parity.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+	$(PYTEST) tests/test_parity.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-go-reference-vectors: all python-protos $(BUILD)/ratelimit-go
-	$(PYTHON) tests/go_reference_vectors.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+	$(PYTEST) tests/test_go_reference_vectors.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-integration: all python-protos $(BUILD)/ratelimit-go
-	$(PYTHON) tests/integration_validation.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+	$(PYTEST) tests/test_integration.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-load: all python-protos $(BUILD)/ratelimit-go
-	$(PYTHON) tests/load.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+	$(PYTEST) tests/test_load.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-redis-pool: all python-protos
-	$(PYTHON) tests/redis_pool_test.py --cpp $(BUILD)/ratelimit-cpp --generated $(BUILD)/python
+	$(PYTEST) tests/test_redis_pool.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
 backend-client-image:
 	docker build --tag ratelimit-cpp-validation-client:latest --file docker/client.Dockerfile .
 test-backend-modes: all python-protos $(BUILD)/ratelimit-go backend-client-image
-	$(PYTHON) tests/backend_modes_docker.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+	$(PYTEST) tests/test_backend_modes.py $(GO_TEST_ARGS) --docker-backends $(PYTEST_ARGS)
+# Every suite except Docker Cluster/Sentinel and the sanitizer builds.
+test-all: test-unit test-wire all dpo-client python-protos $(BUILD)/ratelimit-go $(BUILD)/ratelimit-packet-codec-test
+	$(BUILD)/ratelimit-packet-codec-test
+	$(PYTEST) tests $(GO_TEST_ARGS) --dpo-client=$(BUILD)/ratelimit-client-socket $(PYTEST_ARGS)
 asan:
 	$(MAKE) BUILD=$(ASAN_BUILD) CXXFLAGS='$(ASAN_CXXFLAGS)' LDFLAGS='$(ASAN_LDFLAGS)' all
 test-asan: asan
 	$(MAKE) BUILD=$(ASAN_BUILD) python-protos
-	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(PYTHON) tests/load.py --cpp $(ASAN_BUILD)/ratelimit-cpp --generated $(ASAN_BUILD)/python
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+		$(PYTEST) tests/test_load.py --cpp=$(ASAN_BUILD)/ratelimit-cpp --generated=$(ASAN_BUILD)/python $(PYTEST_ARGS)
 tsan:
 	$(MAKE) BUILD=$(TSAN_BUILD) CXXFLAGS='$(TSAN_CXXFLAGS)' LDFLAGS='$(TSAN_LDFLAGS)' all
 test-tsan: tsan
 	$(MAKE) BUILD=$(TSAN_BUILD) python-protos
-	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 $(PYTHON) tests/load.py --cpp $(TSAN_BUILD)/ratelimit-cpp --generated $(TSAN_BUILD)/python
+	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+		$(PYTEST) tests/test_load.py --cpp=$(TSAN_BUILD)/ratelimit-cpp --generated=$(TSAN_BUILD)/python $(PYTEST_ARGS)
 test: test-unit test-smoke test-wire
 run: all
 	./$(BUILD)/ratelimit-cpp
@@ -192,5 +217,5 @@ docker-build:
 docker-test:
 	bash docker/validate.sh
 clean:
-	$(PYTHON) -c 'import shutil; shutil.rmtree("$(BUILD)", ignore_errors=True)'
+	rm -rf $(BUILD)
 -include $(DEPS)

@@ -1,0 +1,29 @@
+[project]
+name = "ratelimit-cpp-tests"
+version = "0"
+description = "Python test harness for ratelimit-cpp (parity, load, integration, Redis pool, DPO client)"
+requires-python = ">=3.11"
+# Only third-party runtime packages.  The envoy.*, api.*, google.rpc and
+# grpc.health protobuf modules are generated into $(BUILD)/python by
+# `make python-protos` and passed to each test with --generated.
+dependencies = [
+    "grpcio>=1.62",
+    "protobuf>=4.25",
+]
+
+[tool.uv]
+# The tests are scripts run from tests/, not an installable package.
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Only test_*.py.  The older *_test.py files are CLI scripts whose test_*
+# functions take arguments; the test_*.py modules call them.
+python_files = ["test_*.py"]
+# Runs share fixed paths under build/ and real processes; keep output readable.
+addopts = "-ra"

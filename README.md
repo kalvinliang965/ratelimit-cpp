@@ -80,28 +80,52 @@ for the JSON fixtures, output files, and standalone library.
 
 ## Verify
 
-`make test` runs the wire codec checks, policy unit tests, and 20 live C++ Redis/gRPC scenarios.
-It needs `redis-server` and Python packages `grpcio` and `protobuf`.
+The Python test environment is pinned in `pyproject.toml` and `uv.lock` (no
+installable package). The Makefile uses [uv](https://docs.astral.sh/uv/) when
+it is installed and otherwise `python3`, which then needs `grpcio`, `protobuf`
+and `pytest`; set `PYTHON=...` to choose another interpreter. Redis tests need
+`redis-server`.
 
 The Go reference is pinned as a submodule at `third_party/ratelimit`. Clone with
 `--recurse-submodules`, or run `git submodule update --init --recursive` in an
 existing checkout to get the pinned revision.
 
-`make test-parity` also builds the pinned Go reference and compares every
-serialized gRPC response, gRPC error, and final Redis counters. It tests 199
-request comparisons across the policy and cache behaviors listed above.
-
 ```sh
-make test
-make test-parity
+uv sync --locked          # once: create .venv from uv.lock
+make test                 # quick: config unit test, wire codec, 28 C++ smoke scenarios
+make test-parity          # builds the Go reference; byte-compares every response,
+                          # gRPC error and final Redis state (28 scenarios, 220 comparisons)
+make test-all             # every suite except Docker backend modes and sanitizers
+make test-parity PYTEST_ARGS='-k metadata -v'   # one scenario
 ```
 
-The malformed-wire assertion remains byte-exact. Go protobuf v1.36.11
-deliberately chooses either an ASCII space or U+00A0 after `proto:` from a
-hash of the running Go executable. Therefore, an independently rebuilt Go
-reference can report a real status-detail mismatch even when every normal API
-behavior agrees; the result is not normalized. The pinned Docker reference
-currently emits U+00A0, which is the value used by this C++ build.
+`make help` lists the individual suites (`test-load`, `test-integration`,
+`test-go-reference-vectors`, `test-redis-pool`, `test-dpo-client`), the
+Docker-based `test-backend-modes`, and the sanitizer builds.
+
+The suites are pytest modules (`tests/test_*.py`, one test per scenario), and
+`--generated` points at the protobuf modules `make python-protos` writes to
+`build/python`; they are not Python dependencies. pytest can be run directly
+after building; tests whose binaries or files are missing are skipped with the
+reason:
+
+```sh
+uv run --locked pytest -v                                    # C++ only
+uv run --locked pytest --go=build/ratelimit-go -v            # plus C++/Go parity and integration
+uv run --locked pytest tests/test_parity.py --go=build/ratelimit-go -k metadata -v
+uv run --locked pytest --go=build/ratelimit-go --docker-backends -k backend_mode   # Cluster/Sentinel
+```
+
+Write these options as `--option=value` (for example
+`--dpo-root=../smartnic-generic-rpc`): pytest reads command-line paths before
+it loads the options from `tests/conftest.py`, so a separate value outside the
+repository would be taken as a test path.
+
+Comparisons are byte-exact except for two formatting choices Go's protobuf
+library makes per binary: the whitespace in the protobuf text of
+`dynamic_metadata` descriptor limits, and an ASCII space or U+00A0 after
+`proto:` in error details. `tests/parity_suite/comparison.py` handles only
+those two, so the result does not depend on how the Go reference was built.
 
 The checked-in `proto/reference.pb` pins the exact API descriptors imported by
 the Go reference. `scripts/vendor_protos.py` creates the C++ schemas from that

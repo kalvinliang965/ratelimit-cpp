@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Black-box C++/Go integration validation using real gRPC and Redis processes.
 
 The two implementations use isolated Redis instances, receive the same policy
@@ -7,7 +6,6 @@ successful replies use deterministic protobuf bytes, failures use the exact
 gRPC (code, details) pair, and Redis snapshots include keys, values, and TTLs.
 """
 
-import argparse
 import concurrent.futures
 import contextlib
 from datetime import datetime, timezone
@@ -1539,16 +1537,9 @@ def test_xds_sotw(args):
         server.stop()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cpp", required=True)
-    parser.add_argument("--go", required=True)
-    parser.add_argument("--generated", default="build/python")
-    parser.add_argument("--filter", default="")
-    parser.add_argument("--keep-logs", action="store_true")
-    args = parser.parse_args()
-    args.cpp, args.go = str(Path(args.cpp).resolve()), str(Path(args.go).resolve())
-    sys.path.insert(0, str(Path(args.generated).resolve()))
+def load_generated(generated):
+    """Import the generated protobuf modules these tests use (module globals)."""
+    sys.path.insert(0, str(Path(generated).resolve()))
     global rls
     from envoy.service.ratelimit.v3 import rls_pb2 as rls
     global rate_limit
@@ -1557,7 +1548,7 @@ def main():
     # grpcio owns the top-level ``grpc`` package, so the generated descriptor
     # module cannot be imported through its on-disk grpc/ namespace.  Load the
     # dependency-free generated health message module directly instead.
-    health_path = Path(args.generated).resolve() / "grpc/health/v1/health_pb2.py"
+    health_path = Path(generated).resolve() / "grpc/health/v1/health_pb2.py"
     health_spec = importlib.util.spec_from_file_location("ratelimit_test_health_pb2", health_path)
     health = importlib.util.module_from_spec(health_spec)
     sys.modules[health_spec.name] = health
@@ -1566,36 +1557,25 @@ def main():
     from envoy.service.discovery.v3 import discovery_pb2 as discovery
     global xds_rls
     from api.ratelimit.config.ratelimit.v3 import rls_conf_pb2 as xds_rls
-    tests = [
-        ("sequential_multi_descriptor_ttl", test_sequential_multi_descriptor_ttl),
-        ("expired_redis_key", test_expired_key),
-        ("service_restart_preserves_redis_quota", test_service_restart_preserves_redis_quota),
-        ("redis_restart_and_recovery", test_redis_restart_and_recovery),
-        ("redis_outage_default_health", test_redis_outage_default_health),
-        ("missing_config_and_redis_unavailable_startup", test_missing_and_unavailable_startup),
-        ("invalid_initial_config", test_invalid_initial_config),
-        ("grpc_health", test_grpc_health),
-        ("health_requires_loaded_config_transitions", test_health_requires_loaded_config_transitions),
-        ("quota_same_model_different_backends", test_quota_same_model_different_backends),
-        ("zero_and_uint32_max_limits", test_zero_and_uint32_max_limits),
-        ("statsd_detailed_metric", test_statsd_detailed_metric),
-        ("statsd_go_source_metric_matrix", test_statsd_go_source_metric_matrix),
-        ("calendar_month_current_window_keys", test_calendar_month_current_window_keys),
-        ("grpc_tls_and_mtls", test_grpc_tls_and_mtls),
-        ("grpc_tls_mtls_uds", test_grpc_tls_mtls_uds),
-        ("grpc_client_san_rejection_parity", test_grpc_client_san_rejection_parity),
-        ("xds_sotw", test_xds_sotw),
-    ]
-    ran = 0
-    for name, test in tests:
-        if args.filter in name:
-            test(args)
-            ran += 1
-            print("PASS", name, flush=True)
-    if not ran:
-        parser.error("no tests matched --filter")
-    print("integration validation: %d black-box C++/Go scenarios passed" % ran)
 
 
-if __name__ == "__main__":
-    main()
+TESTS = [
+    ("sequential_multi_descriptor_ttl", test_sequential_multi_descriptor_ttl),
+    ("expired_redis_key", test_expired_key),
+    ("service_restart_preserves_redis_quota", test_service_restart_preserves_redis_quota),
+    ("redis_restart_and_recovery", test_redis_restart_and_recovery),
+    ("redis_outage_default_health", test_redis_outage_default_health),
+    ("missing_config_and_redis_unavailable_startup", test_missing_and_unavailable_startup),
+    ("invalid_initial_config", test_invalid_initial_config),
+    ("grpc_health", test_grpc_health),
+    ("health_requires_loaded_config_transitions", test_health_requires_loaded_config_transitions),
+    ("quota_same_model_different_backends", test_quota_same_model_different_backends),
+    ("zero_and_uint32_max_limits", test_zero_and_uint32_max_limits),
+    ("statsd_detailed_metric", test_statsd_detailed_metric),
+    ("statsd_go_source_metric_matrix", test_statsd_go_source_metric_matrix),
+    ("calendar_month_current_window_keys", test_calendar_month_current_window_keys),
+    ("grpc_tls_and_mtls", test_grpc_tls_and_mtls),
+    ("grpc_tls_mtls_uds", test_grpc_tls_mtls_uds),
+    ("grpc_client_san_rejection_parity", test_grpc_client_san_rejection_parity),
+    ("xds_sotw", test_xds_sotw),
+]

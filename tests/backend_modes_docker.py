@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Black-box Redis Cluster and Sentinel parity validation.
 
 This test deliberately uses Docker only for Redis fixtures.  The C++ and Go
@@ -16,7 +15,6 @@ This probe covers their non-per-second, no-local-cache path while adding a
 black-box C++/Go response and Redis-state comparison.
 """
 
-import argparse
 import base64
 import concurrent.futures
 import json
@@ -566,31 +564,8 @@ def run_mode(args, mode):
             print("backend %s logs retained at %s" % (mode, directory), flush=True)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cpp", required=True)
-    parser.add_argument("--go", required=True)
-    parser.add_argument("--generated", default="build/python")
-    parser.add_argument("--filter", choices=("cluster", "sentinel", ""), default="")
-    parser.add_argument("--keep-logs", action="store_true")
-    parser.add_argument("--client-image", default=os.environ.get(
-        "BACKEND_MODES_CLIENT_IMAGE", "ratelimit-cpp-validation-client:latest"),
-        help="pinned grpcio client image used for strict gRPC metadata comparison")
-    args = parser.parse_args()
-    args.cpp, args.go = str(Path(args.cpp).resolve()), str(Path(args.go).resolve())
-    for binary in (args.cpp, args.go):
-        if not os.access(binary, os.X_OK):
-            parser.error("not an executable: %s" % binary)
-    if not shutil.which("docker"):
-        parser.error("docker is required for Redis Cluster/Sentinel fixtures")
-    sys.path.insert(0, str(Path(args.generated).resolve()))
+def load_generated(generated):
+    """Import the generated protobuf module this suite uses."""
+    sys.path.insert(0, str(Path(generated).resolve()))
     global rls
     from envoy.service.ratelimit.v3 import rls_pb2 as rls
-    modes = [args.filter] if args.filter else ["cluster", "sentinel"]
-    for mode in modes:
-        run_mode(args, mode)
-    print("backend mode validation: %d real Docker Redis backend modes passed" % len(modes), flush=True)
-
-
-if __name__ == "__main__":
-    main()

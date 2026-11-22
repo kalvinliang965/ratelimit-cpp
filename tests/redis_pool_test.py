@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """C++ Redis connection-pool tests: idle connections closed by Redis (Linux only).
 
 These check ratelimit-cpp's own pool, not Go parity: Go's radix pool may fail a
@@ -13,7 +12,6 @@ Observable state is used instead of sleeps:
     so the service has really received the close before the next request.
 """
 
-import argparse
 import concurrent.futures
 import os
 from pathlib import Path
@@ -28,11 +26,11 @@ import time
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 import load  # noqa: E402  (ManagedServer: application and Redis process control)
+from common import support  # noqa: E402
+from parity_suite import scenarios  # noqa: E402
 
-base = load.base
 POOL_SIZE = 3
 LIMIT = 1000000
-passed = 0
 
 
 def check(condition, message):
@@ -135,7 +133,7 @@ class TlsServer(load.ManagedServer):
         self.cert, self.key = cert, key
 
     def start_redis(self):
-        port = base.free_port()
+        port = support.free_port()
         self.launch(["redis-server", "--bind", "127.0.0.1", "--port", "0", "--tls-port", str(port),
                      "--tls-cert-file", self.cert, "--tls-key-file", self.key,
                      "--tls-ca-cert-file", self.cert, "--tls-auth-clients", "no",
@@ -166,7 +164,7 @@ def make_tls_material(directory):
 class Fixture:
     def __init__(self, args, name, tls=False):
         self.directory = Path(tempfile.mkdtemp(prefix="ratelimit-cpp-pool-%s-" % name))
-        config = base.policy(base.rule("pool", LIMIT, "hour"))
+        config = scenarios.policy(scenarios.rule("pool", LIMIT, "hour"))
         settings = {"REDIS_POOL_SIZE": str(POOL_SIZE)}
         if tls:
             cert, key = make_tls_material(self.directory)
@@ -175,7 +173,7 @@ class Fixture:
         else:
             self.server = load.ManagedServer(args.cpp, self.directory / "cpp", config, settings)
         self.args, self.cert = args, cert if tls else None
-        self.request = base.request(base.descriptor(("pool", "x")), hits=1)
+        self.request = scenarios.request(scenarios.descriptor(("pool", "x")), hits=1)
 
     def __enter__(self):
         self.server.start()
@@ -192,7 +190,7 @@ class Fixture:
 
     def ok(self, label):
         result = self.server.call(self.request)
-        check(not isinstance(result, tuple) and result.overall_code == base.rls.RateLimitResponse.OK,
+        check(not isinstance(result, tuple) and result.overall_code == scenarios.rls.RateLimitResponse.OK,
               "%s: expected OK, got %r" % (label, result))
         return result
 
@@ -304,33 +302,3 @@ TESTS_TO_RUN = [
     ("tls_healthy_idle_reuse", test_tls_healthy_idle_reuse, True),
     ("tls_idle_connections_closed_by_redis", test_tls_idle_connections_closed_by_redis, True),
 ]
-
-
-def main():
-    global passed
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cpp", required=True, help="Path to the C++ service binary")
-    parser.add_argument("--generated", default="build/python", help="Generated Python protobuf directory")
-    parser.add_argument("--filter", default="", help="Run tests whose name contains this string")
-    parser.add_argument("--keep-logs", action="store_true")
-    args = parser.parse_args()
-    args.cpp = str(Path(args.cpp).resolve())
-    base.load_protos(args.generated)
-    failed = []
-    for name, test, tls in TESTS_TO_RUN:
-        if args.filter not in name:
-            continue
-        try:
-            with Fixture(args, name, tls) as fixture:
-                test(fixture)
-            passed += 1
-            print("PASS", name, flush=True)
-        except AssertionError as error:
-            failed.append(name)
-            print("FAIL %s: %s" % (name, error), flush=True)
-    print("redis pool: %d passed, %d failed%s" % (passed, len(failed), (": " + ", ".join(failed)) if failed else ""))
-    sys.exit(1 if failed or not passed else 0)
-
-
-if __name__ == "__main__":
-    main()
