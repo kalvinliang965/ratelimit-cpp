@@ -939,6 +939,53 @@ def test_redis_restart_and_recovery(args):
         pair.snapshot("Redis restart recovered Redis state")
 
 
+def observe_health(pair, wanted, label, duration=1.2):
+    """Require both services to report `wanted` on every health sample for `duration` seconds.
+
+    The C++ frontend refreshes its health status every 100 ms, so a sustained
+    window, not a single probe, is what shows the status does not change.
+    """
+    deadline = time.monotonic() + duration
+    samples = 0
+    while True:
+        for service in pair.services:
+            for name in ("", "ratelimit"):
+                result = service.check_health(name)
+                if isinstance(result, tuple) or result.status != wanted:
+                    raise AssertionError("%s: %s health(%r) after %d samples was %r, expected %s" % (
+                        label, service.label, name, samples, result,
+                        health.HealthCheckResponse.ServingStatus.Name(wanted)))
+        samples += 1
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    for name in ("", "ratelimit"):
+        pair.health(name, "%s final exact comparison (%r)" % (label, name))
+
+
+def test_redis_outage_default_health(args):
+    """With REDIS_HEALTH_CHECK_ACTIVE_CONNECTION unset (default false), Go marks
+    the Redis health component healthy once Redis answers at startup and never
+    fails it afterwards (src/redis/driver_impl.go poolTrace and NewClientImpl).
+    A Redis outage makes requests fail, but gRPC health stays SERVING, including
+    after Redis returns with no request traffic.
+    """
+    config = policy(rule("health", 3, "minute"), domain="redis-health")
+    request = make_request("redis-health", (("health", "x"),))
+    # One pooled connection per side makes the outage request fail identically
+    # (the established connection reads EOF) instead of depending on Go's pool.
+    with paired_servers(args, "redis-outage-health", config, {"REDIS_POOL_SIZE": "1"}) as pair:
+        serving = health.HealthCheckResponse.SERVING
+        wait_for_health(pair, serving, "startup health")
+        assert not isinstance(pair.call(request, "health initial request"), tuple)
+        pair.stop_redis()
+        failure = pair.call(request, "health outage request")
+        assert isinstance(failure, tuple), "an unavailable Redis must fail the RPC"
+        observe_health(pair, serving, "Redis outage after a failed request")
+        pair.restart_redis()
+        observe_health(pair, serving, "Redis restarted, no request traffic")
+
+
 def startup_failure(args, name, config, create_config, start_redis, extra_env):
     directory = Path(tempfile.mkdtemp(prefix="ratelimit-cpp-integration-%s-" % name))
     services = [
@@ -1524,6 +1571,7 @@ def main():
         ("expired_redis_key", test_expired_key),
         ("service_restart_preserves_redis_quota", test_service_restart_preserves_redis_quota),
         ("redis_restart_and_recovery", test_redis_restart_and_recovery),
+        ("redis_outage_default_health", test_redis_outage_default_health),
         ("missing_config_and_redis_unavailable_startup", test_missing_and_unavailable_startup),
         ("invalid_initial_config", test_invalid_initial_config),
         ("grpc_health", test_grpc_health),

@@ -308,6 +308,9 @@ struct Redis::Impl {
   size_t busy = 0;
   std::unordered_map<std::string, std::vector<std::unique_ptr<Stream>>> idle;
   std::unordered_map<uint16_t, std::string> slots;
+  // Health of the Redis component, as in Go with REDIS_HEALTH_CHECK_ACTIVE_CONNECTION
+  // unset (the default): healthy once Redis answers PING at startup, and not
+  // changed by later command failures (driver_impl.go NewClientImpl/poolTrace).
   std::atomic<bool> healthy{false};
 
   explicit Impl(bool per_second)
@@ -405,7 +408,7 @@ struct Redis::Impl {
         for (const auto* c : commands) buffer += encode(c->args);
         stream->write(buffer);
         for (size_t i = 0; i < commands.size(); ++i) replies.push_back(readReply(*stream));
-      } catch (...) { healthy = false; release(target, nullptr); throw; }
+      } catch (...) { release(target, nullptr); throw; }
       std::string error;
       for (const auto& reply : replies) if (reply.type == '-') { error = reply.text; break; }
       bool discard = error.rfind("READONLY", 0) == 0 && (close_readonly || kind == "sentinel");
@@ -420,7 +423,7 @@ struct Redis::Impl {
             continue;
           }
         }
-        healthy = !discard; throw std::runtime_error(error);
+        throw std::runtime_error(error);
       }
       for (size_t i = 0; i < commands.size(); ++i) if (commands[i]->result) {
         if (replies[i].type == '_') *commands[i]->result = 0;
@@ -430,7 +433,7 @@ struct Redis::Impl {
           *commands[i]->result = std::stoull(replies[i].text);
         }
       }
-      healthy = true; return;
+      return;
     }
     throw std::runtime_error("too many Redis cluster redirects");
   }
