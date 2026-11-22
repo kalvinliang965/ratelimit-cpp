@@ -225,9 +225,15 @@ def test_healthy_idle_reuse(fixture):
     fixture.burst(24, "warm-up burst")
     before = fixture.ids_within_pool("after warm-up")
     fixture.sequential(20, "sequential reuse")
+    # Sequential requests never need a second connection: nothing new, nothing dropped.
+    after_sequential = fixture.ids_within_pool("after sequential reuse")
+    check(after_sequential == before, "sequential reuse changed connections: %r -> %r" %
+          (before, after_sequential))
     fixture.burst(24, "concurrent reuse")
-    after = fixture.ids_within_pool("after reuse")
-    check(after == before, "healthy connections were replaced: %r -> %r" % (before, after))
+    # A burst may open more connections up to REDIS_POOL_SIZE (the warm-up may
+    # not have reached it), but every healthy one must still be in use.
+    after = fixture.ids_within_pool("after concurrent reuse")
+    check(before <= after, "healthy connections were replaced: %r -> %r" % (before, after))
 
 
 def test_idle_connections_closed_by_redis(fixture):
