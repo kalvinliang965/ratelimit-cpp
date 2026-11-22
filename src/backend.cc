@@ -127,6 +127,10 @@ struct Tls {
   ~Tls() { if (ctx) SSL_CTX_free(ctx); }
 };
 
+// The error radix (the Go service's Redis client) returns for a pooled
+// connection whose peer closed it; it becomes the gRPC UNKNOWN details.
+const char* const kConnEofError = "response returned from Conn: EOF";
+
 // One bounded, buffered connection. Blocking operations use the configured I/O
 // timeout, and the connect timeout also covers TCP establishment.
 class Stream {
@@ -193,6 +197,26 @@ class Stream {
     }
   }
   ~Stream() { if (ssl_) SSL_free(ssl_); if (fd_ >= 0) ::close(fd_); }
+
+  // State of a connection that has been idle in the pool.  Checked without
+  // blocking and without consuming data, so a usable connection is unchanged.
+  // Best effort: Redis can still close it right after this check.
+  enum class Idle { Usable, Closed, Broken };
+  Idle idleState() {
+    // An idle connection has no reply bytes left over; any would mean the
+    // reply stream is out of step with the commands.
+    if (offset_ < input_.size() || (ssl_ && SSL_pending(ssl_) > 0)) return Idle::Broken;
+    char byte;
+    ssize_t n;
+    do { n = ::recv(fd_, &byte, 1, MSG_PEEK | MSG_DONTWAIT); } while (n < 0 && errno == EINTR);
+    if (n == 0) return Idle::Closed;
+    if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK ? Idle::Usable : Idle::Broken;
+    // Redis sends nothing unsolicited to an idle RESP2 connection.  Over TLS,
+    // the readable bytes may instead be TLS records such as TLS 1.3 session
+    // tickets, which carry no application data.
+    return ssl_ ? tlsIdleState() : Idle::Broken;
+  }
+
   void write(const std::string& data) {
     size_t sent = 0;
     while (sent < data.size()) {
@@ -219,6 +243,23 @@ class Stream {
     auto result = input_.substr(offset_, count); offset_ += count; return result;
   }
  private:
+  // Process pending TLS records without blocking: SSL_peek reads records but
+  // leaves application data in place.
+  Idle tlsIdleState() {
+    const int flags = fcntl(fd_, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) return Idle::Broken;
+    ERR_clear_error();
+    char byte;
+    const int n = SSL_peek(ssl_, &byte, 1);
+    const int error = n > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl_, n);
+    ERR_clear_error();
+    fcntl(fd_, F_SETFL, flags);
+    if (n > 0) return Idle::Broken;                          // unsolicited application data
+    if (error == SSL_ERROR_WANT_READ) return Idle::Usable;   // only non-application records
+    if (error == SSL_ERROR_ZERO_RETURN) return Idle::Closed; // close_notify
+    return Idle::Broken;
+  }
+
   void fill() {
     if (offset_) { input_.erase(0, offset_); offset_ = 0; }
     char buffer[16384];
@@ -229,7 +270,7 @@ class Stream {
     // rate-limit handler when a pooled connection is closed while awaiting a
     // reply.  It becomes the observable gRPC UNKNOWN details, so preserve the
     // same boundary rather than exposing the transport's bare EOF.
-    if (n == 0) throw std::runtime_error("response returned from Conn: EOF");
+    if (n == 0) throw std::runtime_error(kConnEofError);
     if (n < 0) throw std::runtime_error("backend read: " + std::string(std::strerror(errno)));
     input_.append(buffer, n);
   }
@@ -379,17 +420,35 @@ struct Redis::Impl {
     if (address.db) command(*stream, {"SELECT", std::to_string(address.db)});
     return stream;
   }
+  // Takes one capacity slot (busy) and returns an exclusively owned connection;
+  // release() gives the slot back.  Idle connections are checked outside the
+  // mutex (this thread owns them once popped); a closed or broken one is
+  // dropped and the same slot moves on to the next idle connection or a new one.
   std::unique_ptr<Stream> acquire(const std::string& target) {
     std::unique_lock<std::mutex> lock(mutex);
     available.wait(lock, [&] { return busy < pool_size; });
     ++busy;
-    auto& connections = idle[target];
-    if (!connections.empty()) {
-      auto stream = std::move(connections.back()); connections.pop_back(); return stream;
+    bool dropped_closed = false;
+    for (;;) {
+      auto& connections = idle[target];
+      if (connections.empty()) break;
+      auto stream = std::move(connections.back()); connections.pop_back();
+      lock.unlock();
+      const auto state = stream->idleState();
+      if (state == Stream::Idle::Usable) return stream;
+      dropped_closed = dropped_closed || state == Stream::Idle::Closed;
+      stream.reset();
+      lock.lock();
     }
     lock.unlock();
     try { return connect(target); }
-    catch (...) { release(target, nullptr); throw; }
+    catch (...) {
+      release(target, nullptr);
+      // Go reports a request that draws a pooled connection the server closed
+      // as this EOF; report the same when that connection cannot be replaced.
+      if (dropped_closed) throw std::runtime_error(kConnEofError);
+      throw;
+    }
   }
   void release(const std::string& target, std::unique_ptr<Stream> stream) {
     std::lock_guard<std::mutex> lock(mutex);

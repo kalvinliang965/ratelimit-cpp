@@ -44,7 +44,7 @@ ASAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=address,undefined
 TSAN_CXXFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=thread
 TSAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=thread
 
-.PHONY: all clean run test test-unit test-smoke test-wire dpo-client test-dpo-client test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
+.PHONY: all clean run test test-unit test-smoke test-wire dpo-client test-dpo-client test-redis-pool test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
 all: $(BUILD)/ratelimit-cpp
 help:
 	@echo 'make [-j4]           Build the standalone C++ service'
@@ -56,6 +56,7 @@ help:
 	@echo 'make test-go-reference-vectors Run selected unmodified Go test fixtures through real C++/Go gRPC/Redis'
 	@echo 'make test-integration Run black-box Redis/gRPC/restart/failure parity checks'
 	@echo 'make test-load       Run real multi-client gRPC/Redis concurrency and restart parity checks'
+	@echo 'make test-redis-pool Run C++ Redis pool tests for idle connections Redis closed (Linux, needs openssl)'
 	@echo 'make test-backend-modes Run real Docker Redis Cluster/Sentinel C++/Go gRPC parity checks'
 	@echo 'make test-asan       Build with ASan/UBSan and run the C++ load suite'
 	@echo 'make test-tsan       Build with TSan and run the C++ load suite (if runtime supports it)'
@@ -164,6 +165,8 @@ test-integration: all python-protos $(BUILD)/ratelimit-go
 	$(PYTHON) tests/integration_validation.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
 test-load: all python-protos $(BUILD)/ratelimit-go
 	$(PYTHON) tests/load.py --cpp $(BUILD)/ratelimit-cpp --go $(BUILD)/ratelimit-go --generated $(BUILD)/python
+test-redis-pool: all python-protos
+	$(PYTHON) tests/redis_pool_test.py --cpp $(BUILD)/ratelimit-cpp --generated $(BUILD)/python
 backend-client-image:
 	docker build --tag ratelimit-cpp-validation-client:latest --file docker/client.Dockerfile .
 test-backend-modes: all python-protos $(BUILD)/ratelimit-go backend-client-image
