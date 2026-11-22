@@ -1,30 +1,20 @@
+// Redis backend: configuration, startup, routing (single, Sentinel, Cluster
+// MOVED/ASK), and pipelined command execution.  Connections come from
+// backend/redis_pool.h; transport and RESP from backend/stream.h and resp.h.
 #include "backend.h"
 #include "common.h"
-#include <arpa/inet.h>
-#include <arpa/nameser.h>
-#include <netdb.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <resolv.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <openssl/err.h>
-#include <openssl/ssl.h>
+#include "backend/redis_pool.h"
+#include "backend/resp.h"
+#include "backend/stream.h"
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
+#include <cctype>
 #include <chrono>
-#include <condition_variable>
-#include <cstring>
-#include <deque>
 #include <iostream>
-#include <limits>
 #include <mutex>
-#include <optional>
+#include <stdexcept>
 #include <thread>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace rlc {
 double durationSeconds(const std::string& text) {
@@ -52,275 +42,19 @@ double durationSeconds(const std::string& text) {
   return result;
 }
 namespace {
+using backend::command;
+using backend::encode;
+using backend::parseAddress;
+using backend::readReply;
+using backend::RedisPool;
+using backend::Reply;
+using backend::split;
+using backend::Stream;
+using backend::Tls;
 using Clock = std::chrono::steady_clock;
-std::vector<std::string> split(const std::string& text, char delimiter) {
-  std::vector<std::string> out;
-  size_t pos = 0, end;
-  do {
-    end = text.find(delimiter, pos);
-    out.push_back(text.substr(pos, end == std::string::npos ? end : end-pos));
-    pos = end + 1;
-  } while (end != std::string::npos);
-  return out;
-}
 std::string lower(std::string text) {
   std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
   return text;
-}
-struct Address {
-  std::string host, port, path, auth;
-  int db = 0;
-};
-Address parseAddress(std::string value, bool unix_socket) {
-  Address a;
-  if (value.rfind("unix://", 0) == 0) { unix_socket = true; value.erase(0, 7); }
-  if (unix_socket) { a.path = value; return a; }
-  if (value.rfind("redis://", 0) == 0) value.erase(0, 8);
-  const auto slash = value.find('/');
-  if (slash != std::string::npos) {
-    const auto db = value.substr(slash+1);
-    if (!db.empty()) a.db = std::stoi(db);
-    value.resize(slash);
-  }
-  const auto at = value.rfind('@');
-  if (at != std::string::npos) { a.auth = value.substr(0, at); value.erase(0, at+1); }
-  if (!value.empty() && value.front() == '[') {
-    const auto bracket = value.find(']');
-    if (bracket == std::string::npos) throw std::runtime_error("invalid Redis address");
-    a.host = value.substr(1, bracket-1);
-    a.port = bracket+1 < value.size() ? value.substr(bracket+2) : "6379";
-  } else {
-    const auto colon = value.rfind(':');
-    a.host = value.substr(0, colon);
-    a.port = colon == std::string::npos ? "6379" : value.substr(colon+1);
-  }
-  return a;
-}
-std::string sslError() {
-  char buffer[256];
-  ERR_error_string_n(ERR_get_error(), buffer, sizeof buffer);
-  return buffer;
-}
-struct Tls {
-  SSL_CTX* ctx = nullptr;
-  bool skip_hostname = false;
-  Tls(bool enabled, const std::string& prefix) {
-    if (!enabled) return;
-    ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) throw std::runtime_error("TLS: " + sslError());
-    try {
-      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-      SSL_CTX_set_default_verify_paths(ctx);
-      skip_hostname = envBool((prefix+"TLS_SKIP_HOSTNAME_VERIFICATION").c_str());
-      const auto ca = env((prefix+"TLS_CACERT").c_str());
-      if (!ca.empty() && !SSL_CTX_load_verify_locations(ctx, ca.c_str(), nullptr))
-        throw std::runtime_error("TLS CA: " + sslError());
-      const auto cert = env((prefix+"TLS_CLIENT_CERT").c_str());
-      const auto key = env((prefix+"TLS_CLIENT_KEY").c_str());
-      if (!cert.empty() && !key.empty()) {
-        if (SSL_CTX_use_certificate_chain_file(ctx, cert.c_str()) != 1 ||
-            SSL_CTX_use_PrivateKey_file(ctx, key.c_str(), SSL_FILETYPE_PEM) != 1 ||
-            SSL_CTX_check_private_key(ctx) != 1) throw std::runtime_error("TLS client key pair: " + sslError());
-      }
-    } catch (...) { SSL_CTX_free(ctx); ctx = nullptr; throw; }
-  }
-  ~Tls() { if (ctx) SSL_CTX_free(ctx); }
-};
-
-// The error radix (the Go service's Redis client) returns for a pooled
-// connection whose peer closed it; it becomes the gRPC UNKNOWN details.
-const char* const kConnEofError = "response returned from Conn: EOF";
-
-// One bounded, buffered connection. Blocking operations use the configured I/O
-// timeout, and the connect timeout also covers TCP establishment.
-class Stream {
- public:
-  Stream(const Address& a, double timeout, const Tls& tls) {
-    auto connectFd = [&](int socket_fd, const sockaddr* sa, socklen_t length) {
-      if (socket_fd < 0) return false;
-      const int flags = fcntl(socket_fd, F_GETFL, 0);
-      fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
-      int ret = ::connect(socket_fd, sa, length);
-      if (ret < 0 && errno == EINPROGRESS) {
-        pollfd p{socket_fd, POLLOUT, 0};
-        ret = ::poll(&p, 1, timeout > 0 ? static_cast<int>(timeout*1000) : -1);
-        if (ret > 0) {
-          int error = 0; socklen_t len = sizeof(error);
-          if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) ret = -1;
-          else if (error) { errno = error; ret = -1; }
-          else ret = 0;
-        } else { errno = ETIMEDOUT; ret = -1; }
-      }
-      if (ret < 0) { ::close(socket_fd); return false; }
-      fcntl(socket_fd, F_SETFL, flags);
-      fd_ = socket_fd;
-      return true;
-    };
-    if (!a.path.empty()) {
-      sockaddr_un sa{}; sa.sun_family = AF_UNIX;
-      if (a.path.size() >= sizeof sa.sun_path) throw std::runtime_error("unix socket path too long");
-      std::memcpy(sa.sun_path, a.path.c_str(), a.path.size()+1);
-      connectFd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0), reinterpret_cast<sockaddr*>(&sa), sizeof sa);
-    } else {
-      addrinfo hints{}, *addresses = nullptr;
-      hints.ai_socktype = SOCK_STREAM;
-      hints.ai_family = AF_UNSPEC;
-      const int error = getaddrinfo(a.host.c_str(), a.port.c_str(), &hints, &addresses);
-      if (error) throw std::runtime_error("lookup " + a.host + ": " + gai_strerror(error));
-      for (auto* ai = addresses; ai && fd_ < 0; ai = ai->ai_next)
-        connectFd(::socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, ai->ai_protocol), ai->ai_addr, ai->ai_addrlen);
-      freeaddrinfo(addresses);
-    }
-    if (fd_ < 0) throw std::runtime_error("backend connection: " + std::string(std::strerror(errno)));
-    int one = 1;
-    setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    if (timeout > 0) {
-      timeval tv{static_cast<time_t>(timeout), static_cast<suseconds_t>((timeout-static_cast<int64_t>(timeout))*1e6)};
-      setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-      setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-    }
-    if (tls.ctx) {
-      ssl_ = SSL_new(tls.ctx);
-      SSL_set_fd(ssl_, fd_);
-      SSL_set_tlsext_host_name(ssl_, a.host.c_str());
-      if (!tls.skip_hostname) {
-        unsigned char bytes[16];
-        if (inet_pton(AF_INET, a.host.c_str(), bytes) == 1 || inet_pton(AF_INET6, a.host.c_str(), bytes) == 1)
-          X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl_), a.host.c_str());
-        else SSL_set1_host(ssl_, a.host.c_str());
-      }
-      if (SSL_connect(ssl_) != 1) {
-        const std::string message = "TLS handshake: " + sslError();
-        SSL_free(ssl_); ssl_ = nullptr; ::close(fd_); fd_ = -1;
-        throw std::runtime_error(message);
-      }
-    }
-  }
-  ~Stream() { if (ssl_) SSL_free(ssl_); if (fd_ >= 0) ::close(fd_); }
-
-  // State of a connection that has been idle in the pool.  Checked without
-  // blocking and without consuming data, so a usable connection is unchanged.
-  // Best effort: Redis can still close it right after this check.
-  enum class Idle { Usable, Closed, Broken };
-  Idle idleState() {
-    // An idle connection has no reply bytes left over; any would mean the
-    // reply stream is out of step with the commands.
-    if (offset_ < input_.size() || (ssl_ && SSL_pending(ssl_) > 0)) return Idle::Broken;
-    char byte;
-    ssize_t n;
-    do { n = ::recv(fd_, &byte, 1, MSG_PEEK | MSG_DONTWAIT); } while (n < 0 && errno == EINTR);
-    if (n == 0) return Idle::Closed;
-    if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK ? Idle::Usable : Idle::Broken;
-    // Redis sends nothing unsolicited to an idle RESP2 connection.  Over TLS,
-    // the readable bytes may instead be TLS records such as TLS 1.3 session
-    // tickets, which carry no application data.
-    return ssl_ ? tlsIdleState() : Idle::Broken;
-  }
-
-  void write(const std::string& data) {
-    size_t sent = 0;
-    while (sent < data.size()) {
-      const size_t count = std::min<size_t>(data.size()-sent, std::numeric_limits<int>::max());
-      auto n = ssl_ ? SSL_write(ssl_, data.data()+sent, static_cast<int>(count)) :
-          ::send(fd_, data.data()+sent, count, MSG_NOSIGNAL);
-      if (n < 0 && errno == EINTR) continue;
-      if (n <= 0) throw std::runtime_error("backend write: " + std::string(std::strerror(errno)));
-      sent += n;
-    }
-  }
-  std::string line() {
-    for (;;) {
-      const auto end = input_.find("\r\n", offset_);
-      if (end != std::string::npos) {
-        std::string result = input_.substr(offset_, end-offset_); offset_ = end+2; return result;
-      }
-      fill();
-      if (input_.size()-offset_ > 16*1024*1024) throw std::runtime_error("backend protocol line too long");
-    }
-  }
-  std::string bytes(size_t count) {
-    while (input_.size()-offset_ < count) fill();
-    auto result = input_.substr(offset_, count); offset_ += count; return result;
-  }
- private:
-  // Process pending TLS records without blocking: SSL_peek reads records but
-  // leaves application data in place.
-  Idle tlsIdleState() {
-    const int flags = fcntl(fd_, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) return Idle::Broken;
-    ERR_clear_error();
-    char byte;
-    const int n = SSL_peek(ssl_, &byte, 1);
-    const int error = n > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl_, n);
-    ERR_clear_error();
-    fcntl(fd_, F_SETFL, flags);
-    if (n > 0) return Idle::Broken;                          // unsolicited application data
-    if (error == SSL_ERROR_WANT_READ) return Idle::Usable;   // only non-application records
-    if (error == SSL_ERROR_ZERO_RETURN) return Idle::Closed; // close_notify
-    return Idle::Broken;
-  }
-
-  void fill() {
-    if (offset_) { input_.erase(0, offset_); offset_ = 0; }
-    char buffer[16384];
-    int64_t n;
-    do { n = ssl_ ? SSL_read(ssl_, buffer, sizeof buffer) : ::recv(fd_, buffer, sizeof buffer, 0); }
-    while (n < 0 && errno == EINTR);
-    // radix, the Go service's Redis client, returns this wrapped error to the
-    // rate-limit handler when a pooled connection is closed while awaiting a
-    // reply.  It becomes the observable gRPC UNKNOWN details, so preserve the
-    // same boundary rather than exposing the transport's bare EOF.
-    if (n == 0) throw std::runtime_error(kConnEofError);
-    if (n < 0) throw std::runtime_error("backend read: " + std::string(std::strerror(errno)));
-    input_.append(buffer, n);
-  }
-  int fd_ = -1;
-  SSL* ssl_ = nullptr;
-  std::string input_;
-  size_t offset_ = 0;
-};
-
-struct Reply {
-  char type;
-  std::string text;
-  std::vector<Reply> array;
-};
-Reply readReply(Stream& stream, unsigned depth = 0) {
-  if (depth > 64) throw std::runtime_error("Redis protocol nesting limit");
-  auto line = stream.line();
-  if (line.empty()) throw std::runtime_error("empty Redis reply");
-  Reply r{line[0], line.substr(1), {}};
-  if (r.type == '$') {
-    const int64_t size = std::stoll(r.text);
-    if (size == -1) { r.type = '_'; r.text.clear(); }
-    else {
-      if (size < 0 || size > 512*1024*1024) throw std::runtime_error("invalid Redis bulk size");
-      r.text = stream.bytes(size);
-      if (stream.bytes(2) != "\r\n") throw std::runtime_error("invalid Redis bulk terminator");
-    }
-  } else if (r.type == '*') {
-    const int64_t count = std::stoll(r.text);
-    if (count < -1 || count > 1024*1024) throw std::runtime_error("invalid Redis array size");
-    for (int64_t i = 0; i < count; ++i) r.array.push_back(readReply(stream, depth+1));
-  } else if (r.type != '+' && r.type != '-' && r.type != ':') throw std::runtime_error("invalid Redis reply type");
-  return r;
-}
-std::string encode(const std::vector<std::string>& args) {
-  std::string out = "*" + std::to_string(args.size()) + "\r\n";
-  for (const auto& arg : args) out += "$" + std::to_string(arg.size()) + "\r\n" + arg + "\r\n";
-  return out;
-}
-Reply command(Stream& stream, const std::vector<std::string>& args) {
-  stream.write(encode(args));
-  auto reply = readReply(stream);
-  if (reply.type == '-') throw std::runtime_error(reply.text);
-  return reply;
-}
-void authenticate(Stream& stream, const std::string& auth) {
-  if (auth.empty()) return;
-  const auto colon = auth.find(':');
-  if (colon == std::string::npos) command(stream, {"AUTH", auth});
-  else command(stream, {"AUTH", auth.substr(0, colon), auth.substr(colon+1)});
 }
 uint16_t slot(const std::string& original) {
   std::string key = original;
@@ -336,7 +70,7 @@ uint16_t slot(const std::string& original) {
   }
   return crc % 16384;
 }
-}
+}  // namespace
 
 struct Redis::Impl {
   std::string prefix, kind, url, auth, sentinel_auth;
@@ -344,10 +78,8 @@ struct Redis::Impl {
   double timeout;
   size_t pool_size;
   Tls tls;
-  mutable std::mutex mutex;
-  std::condition_variable available;
-  size_t busy = 0;
-  std::unordered_map<std::string, std::vector<std::unique_ptr<Stream>>> idle;
+  RedisPool pool;
+  std::mutex slots_mutex;  // guards slots
   std::unordered_map<uint16_t, std::string> slots;
   // Health of the Redis component, as in Go with REDIS_HEALTH_CHECK_ACTIVE_CONNECTION
   // unset (the default): healthy once Redis answers PING at startup, and not
@@ -363,7 +95,8 @@ struct Redis::Impl {
         close_readonly(envBool("REDIS_CLOSE_CONNECTION_ON_READONLY_ERROR")),
         timeout(durationSeconds(env((prefix+"TIMEOUT").c_str(), "10s"))),
         pool_size(std::max<int64_t>(1, envInt((prefix+"POOL_SIZE").c_str(), 10))),
-        tls(envBool((prefix+"TLS").c_str()), "REDIS_") {
+        tls(envBool((prefix+"TLS").c_str()), "REDIS_"),
+        pool(pool_size, timeout, tls, auth, kind == "single" && unix_socket) {
     if (kind != "single" && kind != "cluster" && kind != "sentinel") throw std::runtime_error("Unrecognized redis type " + kind);
     if (kind == "sentinel" && split(url, ',').size() < 2)
       throw std::runtime_error("Expected master name and a list of urls for the sentinels, in the format: <redis master name>,<sentinel1>,...,<sentineln>");
@@ -378,10 +111,9 @@ struct Redis::Impl {
     const double max_elapsed = durationSeconds(env("REDIS_STARTUP_MAX_ELAPSED_TIME", "0"));
     for (;;) {
       try {
-        const auto target = endpoint("");
-        auto stream = connect(target);
-        if (command(*stream, {"PING"}).text != "PONG") throw std::runtime_error("unexpected PING response");
-        idle[target].push_back(std::move(stream)); healthy = true; break;
+        auto connection = pool.acquire(endpoint(""));
+        if (command(*connection, {"PING"}).text != "PONG") throw std::runtime_error("unexpected PING response");
+        connection.keep(); healthy = true; break;
       } catch (const std::exception& e) {
         const auto elapsed = std::chrono::duration<double>(Clock::now()-start).count();
         if (max_elapsed > 0 && elapsed >= max_elapsed) throw;
@@ -392,11 +124,13 @@ struct Redis::Impl {
     }
   }
 
+  // The address for a key: the URL (single), the slot's known node (cluster),
+  // or the current master reported by the first reachable Sentinel.
   std::string endpoint(const std::string& key) {
     if (kind == "single") return url;
     const auto addresses = split(url, ',');
     if (kind == "cluster") {
-      std::lock_guard<std::mutex> lock(mutex);
+      std::lock_guard<std::mutex> lock(slots_mutex);
       const auto found = slots.find(slot(key));
       return found == slots.end() ? addresses.front() : found->second;
     }
@@ -405,7 +139,7 @@ struct Redis::Impl {
       try {
         auto address = parseAddress(addresses[i], false);
         Stream sentinel(address, timeout, tls);
-        authenticate(sentinel, address.auth.empty() ? sentinel_auth : address.auth);
+        backend::authenticate(sentinel, address.auth.empty() ? sentinel_auth : address.auth);
         const auto reply = command(sentinel, {"SENTINEL", "get-master-addr-by-name", addresses.front()});
         if (reply.array.size() != 2) throw std::runtime_error("sentinel master not found");
         return "[" + reply.array[0].text + "]:" + reply.array[1].text;
@@ -413,72 +147,33 @@ struct Redis::Impl {
     }
     throw std::runtime_error(last);
   }
-  std::unique_ptr<Stream> connect(const std::string& target) {
-    const auto address = parseAddress(target, kind == "single" && unix_socket);
-    auto stream = std::make_unique<Stream>(address, timeout, tls);
-    authenticate(*stream, address.auth.empty() ? auth : address.auth);
-    if (address.db) command(*stream, {"SELECT", std::to_string(address.db)});
-    return stream;
-  }
-  // Takes one capacity slot (busy) and returns an exclusively owned connection;
-  // release() gives the slot back.  Idle connections are checked outside the
-  // mutex (this thread owns them once popped); a closed or broken one is
-  // dropped and the same slot moves on to the next idle connection or a new one.
-  std::unique_ptr<Stream> acquire(const std::string& target) {
-    std::unique_lock<std::mutex> lock(mutex);
-    available.wait(lock, [&] { return busy < pool_size; });
-    ++busy;
-    bool dropped_closed = false;
-    for (;;) {
-      auto& connections = idle[target];
-      if (connections.empty()) break;
-      auto stream = std::move(connections.back()); connections.pop_back();
-      lock.unlock();
-      const auto state = stream->idleState();
-      if (state == Stream::Idle::Usable) return stream;
-      dropped_closed = dropped_closed || state == Stream::Idle::Closed;
-      stream.reset();
-      lock.lock();
-    }
-    lock.unlock();
-    try { return connect(target); }
-    catch (...) {
-      release(target, nullptr);
-      // Go reports a request that draws a pooled connection the server closed
-      // as this EOF; report the same when that connection cannot be replaced.
-      if (dropped_closed) throw std::runtime_error(kConnEofError);
-      throw;
-    }
-  }
-  void release(const std::string& target, std::unique_ptr<Stream> stream) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (stream) idle[target].push_back(std::move(stream));
-    --busy; available.notify_one();
-  }
+
+  // Sends commands for one target as a single pipeline.  Cluster MOVED/ASK
+  // replies redirect the whole group (Redis did not execute it); any other
+  // failure is returned to the caller without retrying.
   void group(const std::vector<const RedisCommand*>& commands) {
     std::string target = endpoint(commands.front()->key);
     bool asking = false;
     for (int attempt = 0; attempt < 8; ++attempt) {
-      auto stream = acquire(target);
+      // If anything below throws, the Lease closes the connection.
+      auto connection = pool.acquire(target);
+      if (asking) command(*connection, {"ASKING"});
+      std::string buffer;
+      for (const auto* c : commands) buffer += encode(c->args);
+      connection->write(buffer);
       std::vector<Reply> replies;
-      try {
-        if (asking) command(*stream, {"ASKING"});
-        std::string buffer;
-        for (const auto* c : commands) buffer += encode(c->args);
-        stream->write(buffer);
-        for (size_t i = 0; i < commands.size(); ++i) replies.push_back(readReply(*stream));
-      } catch (...) { release(target, nullptr); throw; }
+      for (size_t i = 0; i < commands.size(); ++i) replies.push_back(readReply(*connection));
       std::string error;
       for (const auto& reply : replies) if (reply.type == '-') { error = reply.text; break; }
       bool discard = error.rfind("READONLY", 0) == 0 && (close_readonly || kind == "sentinel");
-      release(target, discard ? nullptr : std::move(stream));
+      if (!discard) connection.keep();
       if (!error.empty()) {
         if (kind == "cluster" && (error.rfind("MOVED ", 0) == 0 || error.rfind("ASK ", 0) == 0)) {
           const auto fields = split(error, ' ');
           if (fields.size() == 3) {
             asking = fields[0] == "ASK";
             target = fields[2];
-            if (!asking) { std::lock_guard<std::mutex> lock(mutex); slots[static_cast<uint16_t>(std::stoi(fields[1]))] = target; }
+            if (!asking) { std::lock_guard<std::mutex> lock(slots_mutex); slots[static_cast<uint16_t>(std::stoi(fields[1]))] = target; }
             continue;
           }
         }
@@ -516,148 +211,4 @@ Redis::Redis(bool per_second) : impl_(std::make_unique<Impl>(per_second)) {}
 Redis::~Redis() = default;
 void Redis::pipeline(const std::vector<RedisCommand>& commands) { impl_->pipeline(commands); }
 bool Redis::healthy() const { return impl_->healthy; }
-
-namespace {
-std::vector<std::string> resolveSrv(const std::string& name) {
-  if (name.empty() || name.front() != '_' || name.find("._") == std::string::npos)
-    throw std::runtime_error("could not parse " + name + " to SRV parts");
-  unsigned char answer[65536];
-  int len = res_query(name.c_str(), ns_c_in, ns_t_srv, answer, sizeof answer);
-  if (len < 0) throw std::runtime_error("Unable to fetch servers from SRV");
-  ns_msg message;
-  if (ns_initparse(answer, len, &message) < 0) throw std::runtime_error("Unable to parse SRV reply");
-  std::vector<std::string> result;
-  for (int i = 0; i < ns_msg_count(message, ns_s_an); ++i) {
-    ns_rr rr;
-    if (ns_parserr(&message, ns_s_an, i, &rr) < 0 || ns_rr_type(rr) != ns_t_srv || ns_rr_rdlen(rr) < 7) continue;
-    const auto* data = ns_rr_rdata(rr);
-    char host[NS_MAXDNAME];
-    if (dn_expand(answer, answer+len, data+6, host, sizeof host) < 0) continue;
-    result.push_back(std::string(host)+".:"+std::to_string(ns_get16(data+4)));
-  }
-  if (result.empty()) throw std::runtime_error("no servers returned from SRV");
-  std::sort(result.begin(), result.end()); return result;
-}
-// Go's gomemcache ServerList uses crc32.ChecksumIEEE(key) to choose a shard.
-uint32_t crc32(const std::string& key) {
-  uint32_t value = 0xffffffff;
-  for (unsigned char c : key) {
-    value ^= c;
-    for (int i = 0; i < 8; ++i) value = (value >> 1) ^ ((value & 1) ? 0xedb88320 : 0);
-  }
-  return ~value;
-}
-bool validMemcacheKey(const std::string& key) {
-  if (key.empty() || key.size() > 250) return false;
-  for (unsigned char c : key) if (c <= ' ' || c == 0x7f) return false;
-  return true;
-}
-}
-struct Memcache::Impl {
-  std::vector<std::string> servers;
-  std::string srv = env("MEMCACHE_SRV");
-  double refresh = durationSeconds(env("MEMCACHE_SRV_REFRESH", "0"));
-  Clock::time_point last_refresh = Clock::now();
-  Tls tls{envBool("MEMCACHE_TLS"), "MEMCACHE_"};
-  std::mutex io_mutex, queue_mutex;
-  std::condition_variable pending;
-  std::deque<std::vector<MemcacheUpdate>> queue;
-  bool stopping = false;
-  std::thread worker;
-  std::unordered_map<std::string, std::unique_ptr<Stream>> connections;
-  Impl() {
-    const auto hosts = env("MEMCACHE_HOST_PORT");
-    if (!hosts.empty() && !srv.empty()) throw std::runtime_error("Both MEMCACHE_HOST_PORT and MEMCACHE_SRV are set");
-    if (!srv.empty()) servers = resolveSrv(srv);
-    else if (!hosts.empty()) servers = split(hosts, ',');
-    worker = std::thread([this] {
-      for (;;) {
-        std::vector<MemcacheUpdate> updates;
-        {
-          std::unique_lock<std::mutex> lock(queue_mutex);
-          pending.wait(lock, [&] { return stopping || !queue.empty(); });
-          if (stopping && queue.empty()) return;
-          updates = std::move(queue.front()); queue.pop_front();
-        }
-        for (const auto& update : updates) {
-          try { apply(update); }
-          catch (const std::exception& e) { std::cerr << "Memcached update: " << e.what() << '\n'; }
-        }
-      }
-    });
-  }
-  ~Impl() {
-    { std::lock_guard<std::mutex> lock(queue_mutex); stopping = true; }
-    pending.notify_all(); worker.join();
-  }
-  std::string server(const std::string& key) {
-    if (!validMemcacheKey(key)) throw std::runtime_error("malformed: key is too long or contains invalid characters");
-    if (!srv.empty() && refresh > 0 && std::chrono::duration<double>(Clock::now()-last_refresh).count() >= refresh) {
-      try { servers = resolveSrv(srv); } catch (const std::exception& e) { std::cerr << "Memcached SRV refresh: " << e.what() << '\n'; }
-      last_refresh = Clock::now();
-    }
-    if (servers.empty()) throw std::runtime_error("memcache: no servers configured or available");
-    return servers[crc32(key) % servers.size()];
-  }
-  Stream& connect(const std::string& target) {
-    auto& stream = connections[target];
-    if (!stream) stream = std::make_unique<Stream>(parseAddress(target, !target.empty() && target[0] == '/'), 0.5, tls);
-    return *stream;
-  }
-  void apply(const MemcacheUpdate& update) {
-    std::lock_guard<std::mutex> lock(io_mutex);
-    const auto target = server(update.key);
-    try {
-      auto& stream = connect(target);
-      const auto increment = (update.negative ? "decr " : "incr ") + update.key + " " + std::to_string(update.hits) + "\r\n";
-      stream.write(increment);
-      auto line = stream.line();
-      if (line == "NOT_FOUND" && !update.negative) {
-        const auto value = std::to_string(update.hits);
-        int64_t expiry = update.expiration;
-        if (expiry > 30*24*3600) expiry += std::time(nullptr);
-        stream.write("add " + update.key + " 0 " + std::to_string(static_cast<int32_t>(expiry)) + " " + std::to_string(value.size()) + "\r\n" + value + "\r\n");
-        line = stream.line();
-        if (line == "NOT_STORED") { stream.write(increment); line = stream.line(); }
-      }
-      if (line.rfind("ERROR", 0) == 0 || line.rfind("CLIENT_ERROR", 0) == 0 || line.rfind("SERVER_ERROR", 0) == 0)
-        throw std::runtime_error(line);
-    } catch (...) { connections.erase(target); throw; }
-  }
-  std::unordered_map<std::string, uint64_t> get(const std::vector<std::string>& keys) {
-    std::unordered_map<std::string, uint64_t> values;
-    std::lock_guard<std::mutex> lock(io_mutex);
-    std::unordered_map<std::string, std::vector<std::string>> groups;
-    try { for (const auto& key : keys) groups[server(key)].push_back(key); }
-    catch (const std::exception& e) { std::cerr << "Memcached get: " << e.what() << '\n'; return values; }
-    for (const auto& [target, group] : groups) {
-      try {
-        auto& stream = connect(target);
-        std::string request = "get";
-        for (const auto& key : group) request += " " + key;
-        stream.write(request + "\r\n");
-        for (;;) {
-          const auto line = stream.line();
-          if (line == "END") break;
-          const auto fields = split(line, ' ');
-          if (fields.size() < 4 || fields[0] != "VALUE") throw std::runtime_error(line);
-          const auto data = stream.bytes(std::stoull(fields[3]));
-          if (stream.bytes(2) != "\r\n") throw std::runtime_error("invalid Memcached value terminator");
-          try {
-            size_t end; const auto value = std::stoll(data, &end);
-            if (end == data.size() && value >= INT32_MIN && value <= INT32_MAX) values[fields[1]] = static_cast<uint64_t>(value);
-          } catch (const std::exception&) { /* Go treats non-numeric values as zero. */ }
-        }
-      } catch (const std::exception& e) { connections.erase(target); std::cerr << "Memcached get: " << e.what() << '\n'; }
-    }
-    return values;
-  }
-};
-Memcache::Memcache() : impl_(std::make_unique<Impl>()) {}
-Memcache::~Memcache() = default;
-std::unordered_map<std::string, uint64_t> Memcache::get(const std::vector<std::string>& keys) { return impl_->get(keys); }
-void Memcache::update(std::vector<MemcacheUpdate> updates) {
-  { std::lock_guard<std::mutex> lock(impl_->queue_mutex); impl_->queue.push_back(std::move(updates)); }
-  impl_->pending.notify_one();
-}
-}
+}  // namespace rlc

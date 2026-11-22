@@ -40,7 +40,7 @@ PROTO_CC := $(addprefix $(BUILD)/generated/,$(PROTO_NAMES:.proto=.pb.cc))
 GRPC_NAMES := envoy/service/ratelimit/v3/rls envoy/service/discovery/v3/ads grpc/health/v1/health
 GRPC_CC := $(addprefix $(BUILD)/generated/,$(addsuffix .grpc.pb.cc,$(GRPC_NAMES)))
 PROTO_OBJS := $(PROTO_CC:.cc=.o) $(GRPC_CC:.cc=.o)
-SOURCES := $(wildcard src/*.cc)
+SOURCES := $(wildcard src/*.cc src/backend/*.cc)
 OBJECTS := $(patsubst src/%.cc,$(BUILD)/obj/%.o,$(SOURCES))
 DEPS := $(OBJECTS:.o=.d) $(PROTO_OBJS:.o=.d)
 ASAN_BUILD ?= build-asan
