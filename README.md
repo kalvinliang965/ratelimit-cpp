@@ -103,7 +103,15 @@ make test-parity PYTEST_ARGS='-k metadata -v'   # one scenario
 `test-go-reference-vectors`, `test-redis-pool`, `test-dpo-client`), the
 Docker-based `test-backend-modes`, and the sanitizer builds.
 
-The suites are pytest modules (`tests/test_*.py`, one test per scenario), and
+Tests are grouped by what they exercise: `tests/parity/` (C++/Go scenario
+parity and the comparator), `tests/integration/` (black-box integration, Go
+reference vectors, Redis Cluster/Sentinel), `tests/resilience/` (load,
+restarts, Redis connection pool), `tests/dpo/` (DPO socket client), and
+`tests/cpp/` (C++ unit tests built by the Makefile). Shared code lives in
+`tests/parity_suite/`, `tests/common/` and `tests/conftest.py`; data files in
+`tests/fixtures/`.
+
+The suites are pytest modules (`tests/*/test_*.py`, one test per scenario), and
 `--generated` points at the protobuf modules `make python-protos` writes to
 `build/python`; they are not Python dependencies. pytest can be run directly
 after building; tests whose binaries or files are missing are skipped with the
@@ -112,7 +120,7 @@ reason:
 ```sh
 uv run --locked pytest -v                                    # C++ only
 uv run --locked pytest --go=build/ratelimit-go -v            # plus C++/Go parity and integration
-uv run --locked pytest tests/test_parity.py --go=build/ratelimit-go -k metadata -v
+uv run --locked pytest tests/parity/test_parity.py --go=build/ratelimit-go -k metadata -v
 uv run --locked pytest --go=build/ratelimit-go --docker-backends -k backend_mode   # Cluster/Sentinel
 ```
 

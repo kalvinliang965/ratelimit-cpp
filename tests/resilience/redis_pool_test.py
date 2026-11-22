@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1]  # tests/: common and parity_suite
 sys.path.insert(0, str(TESTS))
 import load  # noqa: E402  (ManagedServer: application and Redis process control)
 from common import support  # noqa: E402

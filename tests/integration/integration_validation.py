@@ -29,8 +29,8 @@ import grpc
 
 
 TEST_DIRECTORY = Path(__file__).resolve().parent
-WORKSPACE = TEST_DIRECTORY.parent / "third_party"
-GO_STATSD_VECTORS = TEST_DIRECTORY / "go_statsd_reference_vectors.json"
+WORKSPACE = TEST_DIRECTORY.parents[1] / "third_party"
+GO_STATSD_VECTORS = TEST_DIRECTORY.parent / "fixtures" / "go_statsd_reference_vectors.json"
 
 
 def free_port():

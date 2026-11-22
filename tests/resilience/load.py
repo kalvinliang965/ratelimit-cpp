@@ -23,7 +23,7 @@ import time
 
 import grpc
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1]  # tests/: common and parity_suite
 sys.path.insert(0, str(TESTS))
 from common import support  # noqa: E402
 from parity_suite import grpc_server, scenarios  # noqa: E402

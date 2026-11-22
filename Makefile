@@ -107,13 +107,13 @@ $(BUILD)/obj/xrpc_conversion.o: src/xrpc_conversion.cc include/xrpc_conversion.h
 $(BUILD)/libxrpc_conversion.a: $(BUILD)/obj/xrpc_conversion.o
 	$(AR) rcs $@ $^
 
-$(BUILD)/xrpc-conversion-test: tests/xrpc_conversion_test.cc $(BUILD)/libxrpc_conversion.a
+$(BUILD)/xrpc-conversion-test: tests/cpp/xrpc_conversion_test.cc $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
-$(BUILD)/xrpc-fast-path-test: tests/xrpc_fast_path_test.cc $(BUILD)/libxrpc_conversion.a
+$(BUILD)/xrpc-fast-path-test: tests/cpp/xrpc_fast_path_test.cc $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
-$(BUILD)/xrpc-conversion-json: tests/xrpc_conversion_json.cc $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
+$(BUILD)/xrpc-conversion-json: tests/cpp/xrpc_conversion_json.cc $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
 test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-fast-path-test $(BUILD)/xrpc-conversion-json
@@ -143,19 +143,19 @@ $(BUILD)/obj/request_json.o: src/request_json.cc include/request_json.h include/
 $(BUILD)/ratelimit-client-socket: $(DPO_CLIENT_OBJS) $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
 
-$(BUILD)/ratelimit-packet-codec-test: tests/ratelimit_packet_codec_test.cc $(BUILD)/obj/dpo_client/ratelimit_packet_codec.o $(BUILD)/libxrpc_conversion.a
+$(BUILD)/ratelimit-packet-codec-test: tests/cpp/ratelimit_packet_codec_test.cc $(BUILD)/obj/dpo_client/ratelimit_packet_codec.o $(BUILD)/libxrpc_conversion.a
 	$(CXX) $(CPPFLAGS) $(DPO_CLIENT_CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
 dpo-client: $(BUILD)/ratelimit-client-socket
 
 test-dpo-client: $(BUILD)/ratelimit-packet-codec-test $(BUILD)/ratelimit-client-socket
 	$(BUILD)/ratelimit-packet-codec-test
-	$(PYTEST) tests/test_dpo_client.py --dpo-client=$(BUILD)/ratelimit-client-socket \
+	$(PYTEST) tests/dpo/test_dpo_client.py --dpo-client=$(BUILD)/ratelimit-client-socket \
 		--generated=$(BUILD)/python $(if $(DPO_ROOT),--dpo-root=$(DPO_ROOT)) $(PYTEST_ARGS)
 
 -include $(DPO_CLIENT_OBJS:.o=.d)
 
-$(BUILD)/config-test: tests/config_test.cc $(BUILD)/obj/config.o $(PROTO_OBJS)
+$(BUILD)/config-test: tests/cpp/config_test.cc $(BUILD)/obj/config.o $(PROTO_OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 test-unit: $(BUILD)/config-test
 	./$(BUILD)/config-test
@@ -175,21 +175,21 @@ CPP_TEST_ARGS = --cpp=$(BUILD)/ratelimit-cpp --generated=$(BUILD)/python
 GO_TEST_ARGS = $(CPP_TEST_ARGS) --go=$(BUILD)/ratelimit-go
 
 test-smoke: all python-protos
-	$(PYTEST) tests/test_parity.py tests/test_comparison.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/parity/test_parity.py tests/parity/test_comparison.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
 test-parity: all python-protos $(BUILD)/ratelimit-go
-	$(PYTEST) tests/test_parity.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/parity/test_parity.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-go-reference-vectors: all python-protos $(BUILD)/ratelimit-go
-	$(PYTEST) tests/test_go_reference_vectors.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/integration/test_go_reference_vectors.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-integration: all python-protos $(BUILD)/ratelimit-go
-	$(PYTEST) tests/test_integration.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/integration/test_integration.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-load: all python-protos $(BUILD)/ratelimit-go
-	$(PYTEST) tests/test_load.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/resilience/test_load.py $(GO_TEST_ARGS) $(PYTEST_ARGS)
 test-redis-pool: all python-protos
-	$(PYTEST) tests/test_redis_pool.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
+	$(PYTEST) tests/resilience/test_redis_pool.py $(CPP_TEST_ARGS) $(PYTEST_ARGS)
 backend-client-image:
 	docker build --tag ratelimit-cpp-validation-client:latest --file docker/client.Dockerfile .
 test-backend-modes: all python-protos $(BUILD)/ratelimit-go backend-client-image
-	$(PYTEST) tests/test_backend_modes.py $(GO_TEST_ARGS) --docker-backends $(PYTEST_ARGS)
+	$(PYTEST) tests/integration/test_backend_modes.py $(GO_TEST_ARGS) --docker-backends $(PYTEST_ARGS)
 # Every suite except Docker Cluster/Sentinel and the sanitizer builds.
 test-all: test-unit test-wire all dpo-client python-protos $(BUILD)/ratelimit-go $(BUILD)/ratelimit-packet-codec-test
 	$(BUILD)/ratelimit-packet-codec-test
@@ -199,13 +199,13 @@ asan:
 test-asan: asan
 	$(MAKE) BUILD=$(ASAN_BUILD) python-protos
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-		$(PYTEST) tests/test_load.py --cpp=$(ASAN_BUILD)/ratelimit-cpp --generated=$(ASAN_BUILD)/python $(PYTEST_ARGS)
+		$(PYTEST) tests/resilience/test_load.py --cpp=$(ASAN_BUILD)/ratelimit-cpp --generated=$(ASAN_BUILD)/python $(PYTEST_ARGS)
 tsan:
 	$(MAKE) BUILD=$(TSAN_BUILD) CXXFLAGS='$(TSAN_CXXFLAGS)' LDFLAGS='$(TSAN_LDFLAGS)' all
 test-tsan: tsan
 	$(MAKE) BUILD=$(TSAN_BUILD) python-protos
 	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
-		$(PYTEST) tests/test_load.py --cpp=$(TSAN_BUILD)/ratelimit-cpp --generated=$(TSAN_BUILD)/python $(PYTEST_ARGS)
+		$(PYTEST) tests/resilience/test_load.py --cpp=$(TSAN_BUILD)/ratelimit-cpp --generated=$(TSAN_BUILD)/python $(PYTEST_ARGS)
 test: test-unit test-smoke test-wire
 run: all
 	./$(BUILD)/ratelimit-cpp

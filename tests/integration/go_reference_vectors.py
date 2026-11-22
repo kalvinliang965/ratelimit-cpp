@@ -24,8 +24,8 @@ import time
 
 
 THIS_DIRECTORY = Path(__file__).resolve().parent
-WORKSPACE = THIS_DIRECTORY.parent / "third_party"
-DEFAULT_VECTORS = THIS_DIRECTORY / "go_reference_vectors.json"
+WORKSPACE = THIS_DIRECTORY.parents[1] / "third_party"
+DEFAULT_VECTORS = THIS_DIRECTORY.parent / "fixtures" / "go_reference_vectors.json"
 
 
 def load_harness(generated):
