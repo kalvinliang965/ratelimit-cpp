@@ -337,30 +337,56 @@ class Runner:
 
     def redis_restart(self):
         name = "redis_restart_error_and_recovery"
-        settings = {"REDIS_TIMEOUT": "500ms"}
-        with self.servers(name, base.policy(base.rule("recover", 5, "hour")), settings) as servers:
+        # One pooled connection per service.  Go's radix pool otherwise keeps up
+        # to ten connections, finds a dead one only when a command or its
+        # background PING uses it, and so may fail requests with EOF for an
+        # unbounded time after Redis returns.  With one connection, a
+        # successful probe proves the only connection is live.
+        settings = {"REDIS_TIMEOUT": "500ms", "REDIS_POOL_SIZE": "1"}
+        config = base.policy(base.rule("recover", 5, "hour"), base.rule("probe", 1000000, "hour"))
+        with self.servers(name, config, settings) as servers:
             # Use an explicitly serialized request-level addend, matching the
             # normal Envoy client path while the Redis pool reconnects.
             request = base.request(base.descriptor(("recover", "x")), hits=1)
-            self.paired_call(servers, request, "%s initial" % name)
+            # The probe matches its own rule, so each probe runs a real Redis
+            # INCRBY/EXPIRE pipeline on a key separate from "recover".
+            probe = base.request(base.descriptor(("probe", "x")), hits=1)
+            initial = self.paired_call(servers, request, "%s initial" % name)
+            if isinstance(initial, tuple) or initial.statuses[0].limit_remaining != 4:
+                raise AssertionError("unexpected initial response: %r" % (initial,))
             self.paired_action(servers, lambda server: server.stop_redis(server.redis_ports[0]))
-            # The exact tuple comparison includes status and error text. Both
-            # services have an established connection here, so a closed Redis
-            # socket should expose the same EOF error without endpoint-specific
-            # address text.
-            failure = self.paired_call(servers, request, "%s unavailable" % name)
-            if not isinstance(failure, tuple) or failure[0] != "UNKNOWN":
-                raise AssertionError("Redis outage did not return UNKNOWN: %r" % (failure,))
-            # Start each real Redis instance and give its production client
-            # pool a short, deterministic recovery interval.  A bare Redis
-            # PING only proves the listener is up; it does not guarantee that
-            # Go's connection pool has discarded the just-closed socket.
-            # Responses after this interval are still compared byte-for-byte.
+            # Both services must fail the RPC with gRPC UNKNOWN.  The details
+            # name a low-level socket error, which depends on how each client
+            # notices the closed connection, so they are not compared here;
+            # integration_validation.py's redis_restart_and_recovery compares them.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(servers)) as pool:
+                failures = list(pool.map(lambda server: server.call(request), servers))
+            for server, failure in zip(servers, failures):
+                if not isinstance(failure, tuple) or failure[0] != "UNKNOWN" or not failure[1]:
+                    raise AssertionError("Redis outage did not return UNKNOWN with details from %s: %r" %
+                                         (server.binary, failure))
             for server in servers:
                 server.restart_redis(server.redis_ports[0])
-            time.sleep(1.2)
+            # Wait for each service separately (they reconnect on different
+            # schedules); radix backs off up to 4 s between reconnect attempts.
+            for server in servers:
+                deadline = time.monotonic() + 15
+                while True:
+                    result = server.call(probe)
+                    if not isinstance(result, tuple) and result.overall_code == base.rls.RateLimitResponse.OK:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("%s did not serve Redis-backed requests after restart: %r" %
+                                             (server.binary, result))
+                    time.sleep(0.05)
+            # Strict byte comparison once both are ready.  The restarted Redis
+            # is empty, and no "recover" request failed after the restart
+            # (the outage request went to the old process), so no ambiguous
+            # nontransactional INCRBY can have reached the new counter: the
+            # first request must see exactly limit - 1 remaining.
             outcome = self.paired_call(servers, request, "%s recovered" % name)
-            if isinstance(outcome, tuple) or outcome.overall_code != base.rls.RateLimitResponse.OK:
+            if isinstance(outcome, tuple) or outcome.overall_code != base.rls.RateLimitResponse.OK \
+                    or outcome.statuses[0].limit_remaining != 4:
                 raise AssertionError("service did not recover after Redis restart: %r" % (outcome,))
         self.passed += 1
         print("PASS", name, flush=True)
