@@ -44,12 +44,14 @@ ASAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=address,undefined
 TSAN_CXXFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=thread
 TSAN_LDFLAGS := $(LOCAL_LDFLAGS) -fsanitize=thread
 
-.PHONY: all clean run test test-unit test-smoke test-wire test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
+.PHONY: all clean run test test-unit test-smoke test-wire dpo-client test-dpo-client test-parity test-go-reference-vectors test-integration test-load test-backend-modes backend-client-image asan test-asan tsan test-tsan python-protos install help check-deps deps docker-build docker-test
 all: $(BUILD)/ratelimit-cpp
 help:
 	@echo 'make [-j4]           Build the standalone C++ service'
 	@echo 'make test           Config, wire, and Redis/gRPC smoke tests'
 	@echo 'make test-wire      Standalone wire codec and JSON round-trip tests'
+	@echo 'make dpo-client     Build the DPO UDP socket client (build/ratelimit-client-socket)'
+	@echo 'make test-dpo-client Packet codec test plus captured-packet checks against a mock UDP server'
 	@echo 'make test-parity     Compare against the pinned Go submodule (Go required)'
 	@echo 'make test-go-reference-vectors Run selected unmodified Go test fixtures through real C++/Go gRPC/Redis'
 	@echo 'make test-integration Run black-box Redis/gRPC/restart/failure parity checks'
@@ -108,6 +110,38 @@ test-wire: $(BUILD)/xrpc-conversion-test $(BUILD)/xrpc-fast-path-test $(BUILD)/x
 	$(BUILD)/xrpc-fast-path-test
 	$(BUILD)/xrpc-conversion-json --request
 	$(BUILD)/xrpc-conversion-json --response
+
+# DPO UDP socket client (dpo_client/).  It links only the xrpc payload codec and
+# the JSON request reader: no gRPC, Protobuf, Redis, or DPO runtime, and nothing
+# here is part of the service binary.  DPO_ROOT optionally points at a
+# smartnic-generic-rpc checkout so the layout test also reads ratelimit.dpo and
+# the generated ratelimit_header.h.
+DPO_ROOT ?=
+DPO_CLIENT_CPPFLAGS := -Idpo_client
+DPO_CLIENT_OBJS := $(BUILD)/obj/dpo_client/ratelimit_client_socket.o $(BUILD)/obj/dpo_client/ratelimit_packet_codec.o
+$(BUILD)/obj/dpo_client/%.o: dpo_client/%.cc
+	@mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(DPO_CLIENT_CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+# request_json.cc uses no generated Protobuf headers; spell out its inputs so
+# the standalone client does not require protoc.
+$(BUILD)/obj/request_json.o: src/request_json.cc include/request_json.h include/types.h
+	@mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/ratelimit-client-socket: $(DPO_CLIENT_OBJS) $(BUILD)/obj/request_json.o $(BUILD)/libxrpc_conversion.a
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
+
+$(BUILD)/ratelimit-packet-codec-test: tests/ratelimit_packet_codec_test.cc $(BUILD)/obj/dpo_client/ratelimit_packet_codec.o $(BUILD)/libxrpc_conversion.a
+	$(CXX) $(CPPFLAGS) $(DPO_CLIENT_CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+dpo-client: $(BUILD)/ratelimit-client-socket
+
+test-dpo-client: $(BUILD)/ratelimit-packet-codec-test $(BUILD)/ratelimit-client-socket
+	$(BUILD)/ratelimit-packet-codec-test
+	$(PYTHON) tests/dpo_client_test.py --client $(BUILD)/ratelimit-client-socket $(if $(DPO_ROOT),--dpo-root $(DPO_ROOT))
+
+-include $(DPO_CLIENT_OBJS:.o=.d)
 
 $(BUILD)/config-test: tests/config_test.cc $(BUILD)/obj/config.o $(PROTO_OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
